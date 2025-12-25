@@ -148,6 +148,7 @@ class PhoneNumbersController extends Controller
                     'update' => userCheckPermission('destination_edit'),
                     'destroy' => userCheckPermission('destination_delete'),
                     'upload' => userCheckPermission('destination_upload'),
+                    'export' => userCheckPermission('destination_export'),
 
                 ],
 
@@ -927,7 +928,7 @@ class PhoneNumbersController extends Controller
     //         $dialPlanDetails->dialplan_uuid = $dialPlan->dialplan_uuid;
     //         $dialPlanDetails->dialplan_detail_tag = "action";
     //         $dialPlanDetails->dialplan_detail_type = "set";
-    //         $dialPlanDetails->dialplan_detail_data = "effective_caller_id_name=" . $phoneNumber->destination_cid_name_prefix . "#\${caller_id_name}";
+    //         $dialPlanDetails->dialplan_detail_data = "pfx_effective_caller_id_name=" . $phoneNumber->destination_cid_name_prefix . "#\${pfx_effective_caller_id_name}";
     //         $dialPlanDetails->dialplan_detail_inline = "false";
     //         $dialPlanDetails->dialplan_detail_group = $detailGroup;
     //         $dialPlanDetails->dialplan_detail_order = $detailOrder;
@@ -1218,6 +1219,7 @@ class PhoneNumbersController extends Controller
         $permissions['manage_destination_prefix'] = userCheckPermission('destination_prefix');
         $permissions['manage_destination_domain'] = userCheckPermission('destination_domain');
         $permissions['destination_hold_music'] = userCheckPermission('destination_hold_music');
+        $permissions['destination_export'] = userCheckPermission('destination_export');
 
         return $permissions;
     }

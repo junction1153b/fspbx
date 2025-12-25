@@ -69,7 +69,7 @@
                                                 <FormTab name="page0" label="Device Settings" :elements="[
                                                     'h4',
                                                     'device_address',
-                                                    'device_uuid',
+                                                    'device_clean',
                                                     'device_template',
                                                     'device_profile_uuid',
                                                     'domain_uuid',
@@ -124,7 +124,7 @@
                                             <FormElements>
 
                                                 <StaticElement name="h4" tag="h4" content="Device Settings" />
-                                                 <StaticElement name="device_uuid"
+                                                 <StaticElement name="uuid_clean"
                                                     :conditions="[() => options.permissions.is_superadmin]">
 
                                                     <div class="mb-1">
@@ -633,15 +633,6 @@ const isCloudProvisioningLoading = reactive({
 const emit = defineEmits(['close', 'error', 'success', 'refresh-data'])
 
 const provisioning = ref(null);
-
-const handleCopyToClipboard = (text) => {
-    navigator.clipboard.writeText(text).then(() => {
-        emit('success', 'success', { message: ['Copied to clipboard.'] });
-    }).catch((error) => {
-        // Handle the error case
-        emit('error', { response: { data: { errors: { request: ['Failed to copy to clipboard.'] } } } });
-    });
-}
 
 const handleCopyToClipboard = (text) => {
     navigator.clipboard.writeText(text).then(() => {

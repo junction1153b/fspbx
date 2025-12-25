@@ -28,7 +28,7 @@ class RingGroupsController extends Controller
     protected $viewName = 'RingGroups';
     protected $searchable = ['ring_group_name', 'ring_group_extension', 'destinations.destination_number'];
 
-/**
+    /**
      * Duplicate the specified Ring Group.
      *
      * @param  \Illuminate\Http\Request  $request
@@ -38,11 +38,11 @@ class RingGroupsController extends Controller
     {
         // 1. Validate Input
         $request->validate([
-            'uuid' => 'required|uuid|exists:v_ring_groups,ring_group_uuid', // Assuming table name is v_ring_groups based on standard FusionPBX structure, adjust if your model uses a different table
+            'uuid' => 'required|uuid|exists:v_ring_groups,ring_group_uuid',
         ]);
 
         // 2. Permission Check
-        if (!userCheckPermission('ring_group_add')) { // Using 'ring_group_add' or 'ring_group_create' depending on your permission seeder
+        if (!userCheckPermission('ring_group_add')) {
             return response()->json([
                 'messages' => ['error' => ['Access denied.']]
             ], 403);
@@ -61,7 +61,7 @@ class RingGroupsController extends Controller
             $newRingGroup = $original->replicate();
             $newRingGroup->ring_group_uuid = Str::uuid();
             $newRingGroup->ring_group_name = $original->ring_group_name . ' (Copy)';
-            $newRingGroup->dialplan_uuid = Str::uuid(); // Ensure a new dialplan UUID is generated
+            $newRingGroup->dialplan_uuid = Str::uuid();
             
             // Generate unique extension (Increment based on settings)
             $newRingGroup->ring_group_extension = $this->model->generateUniqueSequenceNumber();

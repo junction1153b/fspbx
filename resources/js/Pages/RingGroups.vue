@@ -296,13 +296,13 @@ const advancedActions = computed(() => [
 
 const handleAdvancedActionRequest = async (action, uuid) => {
     if (action === 'duplicate') {
-        const url = props.routes.duplicate || '/ring-groups/duplicate'; // Fallback if route prop isn't passed immediately
+        const url = props.routes.duplicate || '/ring-groups/duplicate';
         
         try {
             loading.value = true;
             const response = await axios.post(url, { uuid: uuid });
             showNotification('success', response.data.messages);
-            handleSearchButtonClick(); // Refresh table
+            handleSearchButtonClick(); 
         } catch (error) {
             handleErrorResponse(error);
         } finally {

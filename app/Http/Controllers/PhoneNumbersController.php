@@ -815,6 +815,7 @@ public function importCommit(Request $request)
         $permissions['manage_destination_prefix'] = userCheckPermission('destination_prefix');
         $permissions['manage_destination_domain'] = userCheckPermission('destination_domain');
         $permissions['destination_hold_music'] = userCheckPermission('destination_hold_music');
+        $permissions['is_superadmin'] = isSuperAdmin();
 
         return $permissions;
     }

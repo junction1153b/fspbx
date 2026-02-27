@@ -197,7 +197,7 @@
                                             <FormTabs view="vertical" @select="handleTabSelected">
                                                 <FormTab name="page0" label="Basic Info" :elements="[
                                                     'basic_info_title',
-                                                    'extension_clean',
+                                                    'uuid_clean',
                                                     'directory_first_name',
                                                     'directory_last_name',
                                                     'extension',

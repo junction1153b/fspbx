@@ -212,6 +212,8 @@ class ProvisioningController extends Controller
 
         $lines = [];
         foreach ($device->lines as $line) {
+            $isSharedLine = $this->isSharedLineValue($line->shared_line ?? null);
+
             $lines[$line->line_number] = [
                 'user_id'           => $line->user_id ?? null,
                 'auth_id'           => $line->auth_id ?? null,
@@ -225,7 +227,8 @@ class ProvisioningController extends Controller
                 'sip_port'          => $line->sip_port ?? null,
                 'sip_transport'     => $this->normalizeTransportForVendor($device->device_vendor, $line->sip_transport),
                 'register_expires'  => $line->register_expires ?? null,
-                'shared_line'  => $line->shared_line ?? null,
+                'shared_line'       => $isSharedLine,
+                'line_type_id'      => $isSharedLine ? 'sharedline' : 'line',
                 'line_number'       => $line->line_number,
             ];
         }
@@ -520,7 +523,7 @@ class ProvisioningController extends Controller
                     if ($lineObj) {
                         $value = $lineObj->auth_id ?? $value;
 
-                        if (empty($label)) {
+                        if (empty($label) && !($vendor === 'yealink' && $this->isSharedLineValue($lineObj->shared_line ?? null))) {
                             $label = $lineObj->display_name ?? $lineObj->auth_id ?? null;
                         }
                     }
@@ -630,6 +633,10 @@ class ProvisioningController extends Controller
     private function translateEffectiveKeysForVendor(Devices $device, array $keys): array
     {
         foreach ($keys as &$key) {
+            if ($this->lineKeyTargetsSharedLine($device, $key)) {
+                $key['type'] = 'sharedline';
+            }
+
             $translated = $this->translateKeyTypeForVendor(
                 $device->device_vendor,
                 (string) ($key['type'] ?? '')
@@ -717,6 +724,10 @@ class ProvisioningController extends Controller
 
             foreach ($keys as &$k) {
                 if (empty($k['label'])) {
+                    if ($this->templateShouldLabelSharedLineKey($device, $k)) {
+                        continue;
+                    }
+
                     $val = (string) ($k['value'] ?? '');
                     if ($val !== '' && !empty($extLabels[$val])) {
                         $k['label'] = $extLabels[$val];
@@ -761,8 +772,17 @@ class ProvisioningController extends Controller
                 $lines = $device->lines ?? [];
                 $lineObj = collect($lines)->firstWhere('line_number', $line);
 
-                $label = $lineObj->display_name ?? null;
-                $value = $lineObj->auth_id ?? null;
+                if ($lineObj) {
+                    $hasExplicitLabel = trim((string) ($label ?? '')) !== '';
+
+                    if (!($device->device_vendor === 'yealink' && $this->isSharedLineValue($lineObj->shared_line ?? null) && ! $hasExplicitLabel)) {
+                        $label = $hasExplicitLabel ? $label : ($lineObj->display_name ?? $lineObj->auth_id ?? null);
+                    } else {
+                        $label = null;
+                    }
+
+                    $value = $lineObj->auth_id ?? null;
+                }
 
                 if ($device->device_vendor === 'grandstream') {
                     $line = $line - 1;
@@ -822,6 +842,7 @@ class ProvisioningController extends Controller
 
             case 'grandstream':
                 $out['type'] = match ($t) {
+                    'sharedline' => 'sharedline',
                     'speed_dial' => 'speed dial',
                     '' => 'none',
                     'park' => 'monitored call park',
@@ -1021,6 +1042,54 @@ class ProvisioningController extends Controller
 
         // Other vendors: leave as-is (or extend with more mappings later)
         return $transport ?: null;
+    }
+
+    private function isSharedLineValue(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on', 'sharedline'], true);
+    }
+
+    private function lineKeyTargetsSharedLine(Devices $device, array $key): bool
+    {
+        if (strtolower((string) $device->device_vendor) !== 'grandstream') {
+            return false;
+        }
+
+        if (strtolower((string) ($key['type'] ?? '')) !== 'line') {
+            return false;
+        }
+
+        return $this->deviceLineIsShared($device, ((int) ($key['line'] ?? 0)) + 1);
+    }
+
+    private function templateShouldLabelSharedLineKey(Devices $device, array $key): bool
+    {
+        if (strtolower((string) $device->device_vendor) !== 'yealink') {
+            return false;
+        }
+
+        if (strtolower((string) ($key['type'] ?? '')) !== 'line') {
+            return false;
+        }
+
+        $lineNumber = (int) ($key['line'] ?? 0);
+
+        return $this->deviceLineIsShared($device, $lineNumber)
+            || $this->deviceLineIsShared($device, $lineNumber + 1);
+    }
+
+    private function deviceLineIsShared(Devices $device, int $lineNumber): bool
+    {
+        $line = collect($device->lines ?? [])->firstWhere('line_number', $lineNumber);
+        return $line ? $this->isSharedLineValue($line->shared_line ?? null) : false;
     }
 
     private function normalizeProvisionText(string $raw): string

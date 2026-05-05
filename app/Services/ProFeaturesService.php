@@ -416,7 +416,13 @@ class ProFeaturesService
         $extractPath = "{$modulesPath}/{$moduleName}";
         $tmpExtractPath = "{$modulesPath}/.{$moduleName}-" . uniqid('extract-', true);
 
-        file_put_contents($filePath, $artifactContent);
+        if (!is_dir($modulesPath) && !mkdir($modulesPath, 0755, true) && !is_dir($modulesPath)) {
+            throw new \RuntimeException("failed to create modules directory {$modulesPath}");
+        }
+
+        if (file_put_contents($filePath, $artifactContent) === false) {
+            throw new \RuntimeException("failed to write artifact {$filePath}");
+        }
 
         if (file_exists($tarFile)) {
             unlink($tarFile);

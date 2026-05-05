@@ -57,6 +57,8 @@ class ProcessFaxWebhookEventJob implements ShouldQueue
 
             $faxLog->domain_uuid = $domainUuid;
             $faxLog->fax_uuid = $faxUuid;
+            $faxLog->source = $this->stringOrNull($this->data['caller_id_number'] ?? null);
+            $faxLog->destination = $this->stringOrNull($this->data['destination_number'] ?? $this->data['sip_to_user'] ?? null);
             $faxLog->fax_success = $this->stringOrNull($this->data['fax_success'] ?? null);
             $faxLog->fax_result_code = $this->numericOrNull($this->data['fax_result_code'] ?? null);
             $faxLog->fax_result_text = $this->stringOrNull($this->data['fax_result_text'] ?? null);

@@ -39,6 +39,10 @@ local call_direction = clean(header("call_direction", "direction"))
 
 local fax_uuid = clean(header("fax_uuid"))
 local fax_queue_uuid = clean(header("fax_queue_uuid"))
+-- Outbound-only: identify the outbound_faxes row + the specific attempt.
+-- Empty for inbound (the legacy webhook payload remains backward-compatible).
+local outbound_fax_uuid = clean(header("outbound_fax_uuid"))
+local outbound_fax_attempt_uuid = clean(header("outbound_fax_attempt_uuid"))
 local fax_success = clean(header("fax_success"))
 local fax_result_code = clean(header("fax_result_code"))
 local fax_result_text = clean(header("fax_result_text"))
@@ -58,6 +62,10 @@ local fax_file = clean(header("fax_file", "fax_filename"))
 local caller_id_name = clean(header("caller_id_name", "Caller-Caller-ID-Name"))
 local caller_id_number = clean(header("caller_id_number", "Caller-Caller-ID-Number"))
 local sip_to_user = clean(header("sip_to_user"))
+-- destination_number is the dialed number for both inbound (DID) and outbound
+-- (number we faxed to). Falls back to sip_to_user for legacy call topologies
+-- where destination_number isn't populated.
+local destination_number = clean(header("destination_number", "sip_to_user"))
 local bridge_hangup_cause = clean(header("bridge_hangup_cause"))
 local hangup_cause = clean(header("hangup_cause"))
 local hangup_cause_q850 = clean(header("hangup_cause_q850"))
@@ -94,6 +102,8 @@ local payload_table = {
 
         fax_uuid = fax_uuid,
         fax_queue_uuid = fax_queue_uuid,
+        outbound_fax_uuid = outbound_fax_uuid,
+        outbound_fax_attempt_uuid = outbound_fax_attempt_uuid,
         fax_success = fax_success,
         fax_result_code = fax_result_code,
         fax_result_text = fax_result_text,
@@ -113,6 +123,7 @@ local payload_table = {
         caller_id_name = caller_id_name,
         caller_id_number = caller_id_number,
         sip_to_user = sip_to_user,
+        destination_number = destination_number,
 
         bridge_hangup_cause = bridge_hangup_cause,
         hangup_cause = hangup_cause,

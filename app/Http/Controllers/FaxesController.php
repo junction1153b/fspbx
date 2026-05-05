@@ -48,43 +48,9 @@ class FaxesController extends Controller
             return redirect('/');
         }
 
-        $perPage = 50;
         $currentDomain = session('domain_uuid');
 
-        $faxes = QueryBuilder::for(Faxes::class)
-            // only users in the current domain
-            ->where('domain_uuid', $currentDomain)
-            ->inUsersLocations()
-            ->select([
-                'fax_uuid',
-                'domain_uuid',
-                'fax_email',
-                'fax_name',
-                'fax_extension',
-                'fax_destination_number',
-                'fax_caller_id_number',
-                'fax_description',
-            ])
-            // allow ?filter[username]=foo or ?filter[user_email]=bar
-            ->allowedFilters([
-                // Only email and name_formatted
-                AllowedFilter::callback('search', function ($query, $value) {
-                    $query->where(function ($q) use ($value) {
-                        $q->where('fax_name', 'ilike', "%{$value}%")
-                            ->orWhere('fax_email', 'ilike', "%{$value}%")
-                            ->orWhere('fax_caller_id_number', 'ilike', "%{$value}%")
-                            ->orWhere('fax_extension', 'ilike', "%{$value}%");
-                    });
-                }),
-            ])
-            // allow ?sort=-username or ?sort=add_date
-            ->allowedSorts(['fax_name', 'fax_caller_id_number'])
-            // let your front-end optionally eager-load relations
-            ->defaultSort('fax_caller_id_number')
-            ->paginate($perPage);
-
-
-        // wrap in your DTO
+        $faxes = $this->getFaxServers();
         $faxesDto = FaxData::collect($faxes);
 
         // logger($faxesDto);
@@ -147,6 +113,7 @@ class FaxesController extends Controller
 
                 'routes' => [
                     'current_page' => route('faxes.index'),
+                    'data_route' => route('faxes.data'),
                     'recent_outbound_route' => route('faxes.recent-outbound'),
                     'recent_inbound_route' => route('faxes.recent-inbound'),
                     'item_options' => route('faxes.item.options'),
@@ -157,6 +124,56 @@ class FaxesController extends Controller
                 ]
             ]
         );
+    }
+
+    /**
+     * Get fax server table data.
+     */
+    public function getData()
+    {
+        if (!userCheckPermission("fax_view")) {
+            abort(403);
+        }
+
+        return FaxData::collect($this->getFaxServers());
+    }
+
+    private function getFaxServers()
+    {
+        $perPage = 50;
+        $currentDomain = session('domain_uuid');
+
+        return QueryBuilder::for(Faxes::class)
+            ->where('domain_uuid', $currentDomain)
+            ->inUsersLocations()
+            ->select([
+                'fax_uuid',
+                'domain_uuid',
+                'fax_email',
+                'fax_name',
+                'fax_extension',
+                'fax_destination_number',
+                'fax_caller_id_number',
+                'fax_description',
+            ])
+            ->allowedFilters([
+                AllowedFilter::callback('search', function ($query, $value) {
+                    $query->where(function ($q) use ($value) {
+                        $q->where('fax_name', 'ilike', "%{$value}%")
+                            ->orWhere('fax_email', 'ilike', "%{$value}%")
+                            ->orWhere('fax_caller_id_number', 'ilike', "%{$value}%")
+                            ->orWhere('fax_extension', 'ilike', "%{$value}%");
+                    });
+                }),
+            ])
+            ->allowedSorts([
+                'fax_name',
+                'fax_extension',
+                'fax_caller_id_number',
+                'fax_email',
+            ])
+            ->defaultSort('fax_caller_id_number')
+            ->paginate($perPage);
     }
 
     /**

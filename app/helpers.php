@@ -2010,4 +2010,15 @@ if (!function_exists('buildDestinationAction')) {
             logger($message . (!empty($context) ? ' ' . json_encode($context) : ''));
         }
     }
+
+    if (!function_exists('fax_webhook_debug')) {
+        function fax_webhook_debug(string $message, array $context = []): void
+        {
+            if (!config('fax.webhook_debug')) {
+                return;
+            }
+
+            logger($message . (!empty($context) ? ' ' . json_encode($context) : ''));
+        }
+    }
 }

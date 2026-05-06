@@ -10,12 +10,11 @@ use App\Data\FaxData;
 use App\Models\Faxes;
 use App\Models\FaxLogs;
 use App\Models\FaxFiles;
-use App\Data\FaxFileData;
 use App\Models\Dialplans;
 use App\Models\FaxQueues;
-use App\Data\FaxQueueData;
 use App\Data\FaxDetailData;
 use App\Models\FusionCache;
+use App\Models\OutboundFax;
 use Illuminate\Support\Str;
 use App\Models\Destinations;
 use Illuminate\Http\Request;
@@ -259,27 +258,39 @@ class FaxesController extends Controller
 
         $currentDomain = session('domain_uuid');
 
-        $outboundFaxes = QueryBuilder::for(FaxQueues::class)
+        $outboundFaxes = QueryBuilder::for(OutboundFax::class)
             ->select([
-                'fax_queue_uuid',
+                'outbound_fax_uuid',
                 'domain_uuid',
-                'fax_caller_id_number',
-                'fax_number',
-                'fax_date',
-                'fax_status',
+                'fax_uuid',
+                'source',
+                'destination',
+                'status',
+                'retry_count',
+                'retry_limit',
+                'created_at',
             ])
             ->where('domain_uuid', $currentDomain)
-            ->inUsersLocations()
-            ->whereBetween('fax_date', $period)
-            ->orderByDesc('fax_date')
+            ->whereHas('faxServer', function ($q) {
+                $q->inUsersLocations();
+            })
+            ->with([
+                'logs' => function ($q) {
+                    $q->select([
+                        'fax_log_uuid',
+                        'outbound_fax_uuid',
+                        'fax_result_code',
+                        'fax_result_text',
+                        'fax_success',
+                        'fax_date',
+                    ])->orderByDesc('fax_date');
+                },
+            ])
+            ->whereBetween('created_at', $period)
+            ->orderByDesc('created_at')
             ->limit(5)
             ->get();
 
-        // logger($outboundFaxes);
-
-        $outboundFaxesDto = FaxQueueData::collect($outboundFaxes);
-
-        // logger($outboundFaxesDto);
         return response()->json([
             'data'        => $outboundFaxes,
 
@@ -296,42 +307,29 @@ class FaxesController extends Controller
         $currentDomain = session('domain_uuid');
 
 
-        $inboundFaxes = QueryBuilder::for(\App\Models\FaxFiles::class)
+        $inboundFaxes = QueryBuilder::for(FaxLogs::class)
             ->select([
-                'fax_file_uuid',
+                'fax_log_uuid',
                 'fax_uuid',
                 'domain_uuid',
-                'fax_caller_id_number',
+                'source',
+                'destination',
                 'fax_date',
                 'fax_epoch',
             ])
             ->where('domain_uuid', $currentDomain)
-            ->inUsersLocations()
+            ->whereNull('outbound_fax_uuid')
+            ->where('fax_file', 'ilike', '%/inbox/%')
+            ->whereHas('fax', function ($q) {
+                $q->inUsersLocations();
+            })
             ->whereBetween('fax_date', $period)
-            ->where('fax_mode', 'rx')
-
-            ->with([
-                'fax' => function ($q) {
-                    $q->select([
-                        'fax_uuid',
-                        'fax_extension',
-                        'fax_caller_id_number',
-                        'domain_uuid',
-                    ]);
-                },
-            ])
-
             ->orderByDesc('fax_date')
             ->limit(5)
             ->get();
 
-        // logger($inboundFaxes);
-
-        $inboundFaxesDto = FaxFileData::collect($inboundFaxes);
-
-        // logger($inboundFaxesDto);
         return response()->json([
-            'data'        => $inboundFaxesDto,
+            'data'        => $inboundFaxes,
 
         ]);
     }
@@ -1136,10 +1134,10 @@ class FaxesController extends Controller
             ], [], $attributes);
 
             if ($validator->fails()) {
-                // return response()->json(['error' => $validator->errors()]);
                 return response()->json([
-                    'error' => $validator->errors()->first() // Sending the first error message for simplicity
-                ], 400); // Bad Request status code
+                    'message' => $validator->errors()->first(),
+                    'errors'  => $validator->errors(),
+                ], 422);
             }
 
             $data['send_confirmation'] = $request->has('send_confirmation') && $data['send_confirmation'] == 'true';
@@ -1188,7 +1186,8 @@ class FaxesController extends Controller
                 . " at " . $e->getFile() . ":" . $e->getLine());
 
             return response()->json([
-                'messages' => ['error' => [$e->getMessage()]]
+                'message' => $e->getMessage(),
+                'errors'  => ['request' => [$e->getMessage()]],
             ], 500);
         }
     }

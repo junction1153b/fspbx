@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\DefaultSettings;
+use App\Models\FaxLogs;
 use App\Models\OutboundFax;
 use App\Services\FreeswitchEslService;
 use Illuminate\Bus\Queueable;
@@ -35,9 +36,15 @@ class SendFaxJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 3;
-    public $timeout = 60;
+    public $tries = 120;
+    public $timeout = 120;
     public $backoff = 10;
+
+    private const ORIGINATE_THROTTLE_KEY = 'fax-originate';
+    private const ORIGINATE_THROTTLE_ALLOW = 2;
+    private const ORIGINATE_THROTTLE_EVERY_SECONDS = 1;
+    private const ORIGINATE_THROTTLE_BLOCK_SECONDS = 60;
+    private const ORIGINATE_THROTTLE_RELEASE_SECONDS = 10;
 
     public function __construct(public string $outboundFaxUuid)
     {
@@ -46,136 +53,168 @@ class SendFaxJob implements ShouldQueue
 
     public function handle(FreeswitchEslService $esl): void
     {
-        Redis::throttle('fax')->allow(2)->every(1)->then(function () use ($esl) {
-            fax_webhook_debug('SendFaxJob started', [
-                'outbound_fax_uuid' => $this->outboundFaxUuid,
-                'attempt'           => $this->attempts(),
-            ]);
-
-            $fax = OutboundFax::with('faxServer.domain')->find($this->outboundFaxUuid);
-
-            if (!$fax) {
-                fax_webhook_debug('SendFaxJob: row not found, dropping', [
+        Redis::throttle(self::ORIGINATE_THROTTLE_KEY)
+            ->allow(self::ORIGINATE_THROTTLE_ALLOW)
+            ->every(self::ORIGINATE_THROTTLE_EVERY_SECONDS)
+            ->block(self::ORIGINATE_THROTTLE_BLOCK_SECONDS)
+            ->then(function () use ($esl) {
+                fax_webhook_debug('SendFaxJob started', [
                     'outbound_fax_uuid' => $this->outboundFaxUuid,
-                ]);
-                return;
-            }
-
-            // Stop if we've already burned the retry budget.
-            if ($fax->retry_count >= $fax->retry_limit) {
-                fax_webhook_debug('SendFaxJob: retry limit reached, marking failed', [
-                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
-                    'retry_count'       => $fax->retry_count,
-                    'retry_limit'       => $fax->retry_limit,
+                    'queue_attempt'     => $this->attempts(),
                 ]);
 
-                OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
-                    ->whereIn('status', ['waiting', 'trying', 'busy'])
-                    ->update(['status' => 'failed']);
+                $fax = OutboundFax::with('faxServer.domain')->find($this->outboundFaxUuid);
 
-                SendFaxNotificationJob::dispatch($fax->outbound_fax_uuid);
-                return;
-            }
-
-            // Atomic claim: only one worker can transition any pending state to
-            // 'sending'. Defends against duplicate dispatches across servers.
-            $attemptUuid = (string) Str::uuid();
-
-            $claimed = OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
-                ->whereIn('status', ['waiting', 'trying', 'busy'])
-                ->update([
-                    'status'               => 'sending',
-                    'retry_at'             => now(),
-                    'retry_count'          => DB::raw('retry_count + 1'),
-                    'current_attempt_uuid' => $attemptUuid,
-                    'call_uuid'            => null, // populated below once originate is accepted
-                ]);
-
-            if ($claimed === 0) {
-                fax_webhook_debug('SendFaxJob: claim lost (already taken or terminal)', [
-                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
-                    'status'            => $fax->status,
-                ]);
-                return;
-            }
-
-            // Reload after claim so we have the bumped retry_count.
-            $fax->refresh();
-
-            $callUuid    = (string) Str::uuid();
-            $dialString  = $this->buildDialString($fax, $callUuid, $attemptUuid);
-
-            if ($dialString === null) {
-                // No outbound route — short-circuit to 'failed' immediately.
-                logger('SendFaxJob: no outbound route for fax', [
-                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
-                    'destination'       => $fax->destination,
-                ]);
-
-                OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
-                    ->update([
-                        'status'   => 'failed',
-                        'response' => 'no outbound route',
+                if (!$fax) {
+                    fax_webhook_debug('SendFaxJob: row not found, dropping', [
+                        'outbound_fax_uuid' => $this->outboundFaxUuid,
                     ]);
-
-                SendFaxNotificationJob::dispatch($fax->outbound_fax_uuid);
-                return;
-            }
-
-            $command = 'bgapi originate ' . $dialString;
-
-            fax_webhook_debug('SendFaxJob originate prepared', [
-                'outbound_fax_uuid' => $fax->outbound_fax_uuid,
-                'attempt_uuid'      => $attemptUuid,
-                'call_uuid'         => $callUuid,
-                'retry_count'       => $fax->retry_count,
-            ]);
-
-            try {
-                if (!$esl->isConnected()) {
-                    $esl->reconnect();
+                    return;
                 }
 
-                $response = (string) $esl->executeCommand($command);
-
-                fax_webhook_debug('SendFaxJob originate response', [
-                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
-                    'response'          => $response,
-                ]);
-
-                $accepted = stripos($response, '+OK') !== false;
-
-                OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
-                    ->update([
-                        'command'   => $command,
-                        'response'  => $response,
-                        'call_uuid' => $accepted ? $callUuid : null,
-                        'status'    => $accepted ? 'sending' : 'trying',
+                // Stop if we've already burned the retry budget.
+                if ($fax->retry_count >= $fax->retry_limit) {
+                    fax_webhook_debug('SendFaxJob: retry limit reached, marking failed', [
+                        'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                        'retry_count'       => $fax->retry_count,
+                        'retry_limit'       => $fax->retry_limit,
                     ]);
 
-                if (!$accepted) {
-                    fax_webhook_debug('SendFaxJob: originate rejected, will retry', [
+                    OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
+                        ->whereIn('status', ['waiting', 'trying', 'busy'])
+                        ->update(['status' => 'failed']);
+
+                    SendFaxNotificationJob::dispatch($fax->outbound_fax_uuid);
+                    return;
+                }
+
+                // Atomic claim: only one worker can transition any pending state to
+                // 'sending'. Defends against duplicate dispatches across servers.
+                $attemptUuid = (string) Str::uuid();
+
+                $claimed = OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
+                    ->whereIn('status', ['waiting', 'trying', 'busy'])
+                    ->update([
+                        'status'               => 'sending',
+                        'retry_at'             => now(),
+                        'retry_count'          => DB::raw('retry_count + 1'),
+                        'current_attempt_uuid' => $attemptUuid,
+                        'call_uuid'            => null, // populated below once originate is accepted
+                    ]);
+
+                if ($claimed === 0) {
+                    fax_webhook_debug('SendFaxJob: claim lost (already taken or terminal)', [
                         'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                        'status'            => $fax->status,
+                    ]);
+                    return;
+                }
+
+                // Reload after claim so we have the bumped retry_count.
+                $fax->refresh();
+
+                fax_webhook_debug('SendFaxJob: attempt claimed', [
+                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                    'fax_attempt'       => (int) $fax->retry_count,
+                    'retry_limit'       => (int) $fax->retry_limit,
+                    'strategy'          => $this->retryLadderLabel((int) $fax->retry_count),
+                ]);
+
+                $callUuid    = (string) Str::uuid();
+                $dialString  = $this->buildDialString($fax, $callUuid, $attemptUuid);
+
+                fax_webhook_debug('SendFaxJob: originate command prepared', [
+                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                    'dial_string'       => $dialString,
+                ]);
+
+                if ($dialString === null) {
+                    // No outbound route — short-circuit to 'failed' immediately.
+                    logger('SendFaxJob: no outbound route for fax', [
+                        'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                        'destination'       => $fax->destination,
+                    ]);
+
+                    $this->writeSyntheticFaxLog(
+                        fax: $fax,
+                        faxResultText: 'No outbound route matched',
+                    );
+
+                    OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
+                        ->update([
+                            'status'   => 'failed',
+                            'response' => 'no outbound route',
+                        ]);
+
+                    SendFaxNotificationJob::dispatch($fax->outbound_fax_uuid);
+                    return;
+                }
+
+                $command = 'bgapi originate ' . $dialString;
+
+                fax_webhook_debug('SendFaxJob originate prepared', [
+                    'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                    'attempt_uuid'      => $attemptUuid,
+                    'call_uuid'         => $callUuid,
+                    'fax_attempt'       => (int) $fax->retry_count,
+                ]);
+
+                try {
+                    if (!$esl->isConnected()) {
+                        $esl->reconnect();
+                    }
+
+                    $response = (string) $esl->executeCommand($command);
+                    $accepted = stripos($response, '+OK') !== false;
+
+                    fax_webhook_debug('SendFaxJob originate response', [
+                        'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                        'fax_attempt'       => (int) $fax->retry_count,
+                        'accepted'          => $accepted,
                         'response'          => $response,
                     ]);
+
+                    OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
+                        ->update([
+                            'command'   => $command,
+                            'response'  => $response,
+                            'call_uuid' => $accepted ? $callUuid : null,
+                            'status'    => $accepted ? 'sending' : 'trying',
+                        ]);
+
+                    if (!$accepted) {
+                        $this->writeSyntheticFaxLog(
+                            fax: $fax,
+                            faxResultText: 'Originate rejected: ' . trim($response),
+                        );
+
+                        fax_webhook_debug('SendFaxJob: originate rejected, will retry', [
+                            'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                            'response'          => $response,
+                        ]);
+                    }
+                } catch (Throwable $e) {
+                    logger('SendFaxJob ESL error: ' . $e->getMessage());
+
+                    // Revert to 'trying' so the reaper / next dispatch can retry.
+                    OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
+                        ->where('status', 'sending')
+                        ->update([
+                            'status'   => 'trying',
+                            'response' => 'ESL error: ' . $e->getMessage(),
+                        ]);
+
+                    throw $e; // surface to Horizon so the job retries via $tries
                 }
-            } catch (Throwable $e) {
-                logger('SendFaxJob ESL error: ' . $e->getMessage());
+            }, function () {
+                fax_webhook_debug('SendFaxJob: originate throttle busy, releasing', [
+                    'outbound_fax_uuid' => $this->outboundFaxUuid,
+                    'queue_attempt'     => $this->attempts(),
+                    'release_seconds'   => self::ORIGINATE_THROTTLE_RELEASE_SECONDS,
+                ]);
 
-                // Revert to 'trying' so the reaper / next dispatch can retry.
-                OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
-                    ->where('status', 'sending')
-                    ->update([
-                        'status'   => 'trying',
-                        'response' => 'ESL error: ' . $e->getMessage(),
-                    ]);
-
-                throw $e; // surface to Horizon so the job retries via $tries
-            }
-        }, function () {
-            // Could not obtain redis throttle lock; release for another worker.
-            $this->release(5);
-        });
+                $this->release(self::ORIGINATE_THROTTLE_RELEASE_SECONDS);
+            });
     }
 
     /**
@@ -198,39 +237,61 @@ class SendFaxJob implements ShouldQueue
             $channelVariables['toll_allow'] = $tollAllow;
         }
 
-        $route = outbound_route_to_bridge(
+        $routeResult = outbound_route_to_bridge(
             $fax->domain_uuid,
             ($fax->prefix ?? '') . $fax->destination,
-            $channelVariables
+            $channelVariables,
+            true
         );
 
-        if (empty($route)) {
+        $routes = $routeResult['bridges'] ?? [];
+
+        if (empty($routes)) {
+            fax_webhook_debug('No outbound fax route matched', [
+                'domain_uuid' => $fax->domain_uuid,
+                'destination' => ($fax->prefix ?? '') . $fax->destination,
+                'channel_variables' => $channelVariables,
+            ]);
+
             return null;
         }
-        $faxUri = $route[0];
+
+        $faxUri = $routes[0];
+        $selectedRoute = $routeResult['selected_route'] ?? null;
+
+        fax_webhook_debug('Selected fax route', [
+            'route_name' => $selectedRoute['dialplan_name'] ?? null,
+            'route_uuid' => $selectedRoute['dialplan_uuid'] ?? null,
+            'route_order' => $selectedRoute['dialplan_order'] ?? null,
+            'fax_uri' => $faxUri,
+            'lua_actions' => $selectedRoute['lua_actions'] ?? [],
+        ]);
 
         $e = fn($val) => str_replace(["'", '{', '}'], ["\\'", '', ''], (string) $val);
+        $callerIdName = trim((string) $fax->source_name) !== ''
+            ? $fax->source_name
+            : 'Fax Server';
 
         $vars = [
             "origination_uuid={$e($callUuid)}",
             "fax_uuid={$e($fax->fax_uuid)}",
             "outbound_fax_uuid={$e($fax->outbound_fax_uuid)}",
             "outbound_fax_attempt_uuid={$e($attemptUuid)}",
-            "accountcode='{$e($fax->accountcode)}'",
+            "accountcode={$e($fax->accountcode)}",
             "sip_h_X-customacc='{$e($fax->accountcode)}'",
             "execute_on_answer='sched_hangup +14400'",
             "call_direction='outbound'",
             "domain_uuid={$e($fax->domain_uuid)}",
             "domain_name={$e($domainName)}",
-            "origination_caller_id_name='{$e($fax->source_name)}'",
+            "origination_caller_id_name='{$e($callerIdName)}'",
             "origination_caller_id_number='{$e($fax->source)}'",
             "fax_ident='{$e($fax->source)}'",
             "fax_header='{$e($fax->source_name)}'",
             "fax_file='{$e($fax->file_path)}'",
             "hangup_after_bridge=true",
             "continue_on_fail=true",
-            "media_mix_inbound_outbound_codecs='true'",
-            "sip_renegotiate-codec-on-reinvite='true'",
+            "media_mix_inbound_outbound_codecs=true",
+            "sip_renegotiate-codec-on-reinvite=true",
             "absolute_codec_string='PCMU,PCMA'",
             "caller_destination={$e($fax->destination)}",
         ];
@@ -250,6 +311,10 @@ class SendFaxJob implements ShouldQueue
 
         // Domain-configured dial-plan variables (fax.variable settings).
         foreach ($this->domainDialplanVariables() as $extra) {
+            if ($this->retryLadderControlsVariable($extra)) {
+                continue;
+            }
+
             $vars[] = $extra;
         }
 
@@ -262,7 +327,11 @@ class SendFaxJob implements ShouldQueue
             "api_hangup_hook='lua lua/fax_hangup.lua'",
         ]);
 
-        return '{' . implode(',', $vars) . '}' . $faxUri . " &txfax('{$e($fax->file_path)}')";
+        $vars = $this->dedupeChannelVariables($vars);
+
+        $dialplanContext = $domainName !== '' ? ' inline ' . $e($domainName) : '';
+
+        return '{' . implode(',', $vars) . '}' . $faxUri . " 'txfax:{$e($fax->file_path)}'" . $dialplanContext;
     }
 
     /**
@@ -295,5 +364,85 @@ class SendFaxJob implements ShouldQueue
                 ->pluck('default_setting_value')
                 ->all();
         });
+    }
+
+    /**
+     * Record failures that happen before FreeSWITCH can run the fax hangup hook.
+     */
+    private function writeSyntheticFaxLog(
+        OutboundFax $fax,
+        string $faxResultText,
+        mixed $faxResultCode = null,
+    ): FaxLogs {
+        $log = new FaxLogs();
+        $log->fax_log_uuid                   = (string) Str::uuid();
+        $log->domain_uuid                    = $fax->domain_uuid;
+        $log->fax_uuid                       = $fax->fax_uuid;
+        $log->outbound_fax_uuid              = $fax->outbound_fax_uuid;
+        $log->outbound_fax_attempt_uuid      = $fax->current_attempt_uuid;
+        $log->source                         = $fax->source;
+        $log->destination                    = $fax->destination;
+        $log->fax_success                    = '0';
+        $log->fax_result_code                = $faxResultCode;
+        $log->fax_result_text                = $faxResultText;
+        $log->fax_file                       = $fax->file_path;
+        $log->fax_retry_attempts             = $fax->retry_count;
+        $log->fax_retry_limit                = $fax->retry_limit;
+        $log->fax_duration                   = 0;
+        $log->fax_date                       = now();
+        $log->fax_epoch                      = time();
+        $log->save();
+
+        fax_webhook_debug('SendFaxJob: wrote synthetic v_fax_logs row', [
+            'fax_log_uuid'      => $log->fax_log_uuid,
+            'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+            'fax_attempt'       => (int) $fax->retry_count,
+            'fax_result_text'   => $faxResultText,
+        ]);
+
+        return $log;
+    }
+
+    private function retryLadderLabel(int $retryCount): string
+    {
+        return match ($retryCount) {
+            1       => 'default',
+            2       => 't38_ecm_off',
+            3       => 't38_ecm_on',
+            4       => 'audio_ecm_on',
+            5       => 'audio_ecm_off_v17_off',
+            default => 'default',
+        };
+    }
+
+    private function retryLadderControlsVariable(string $variable): bool
+    {
+        $name = trim(strtok($variable, '='));
+
+        return in_array($name, [
+            'fax_disable_v17',
+            'fax_enable_t38',
+            'fax_enable_t38_request',
+            'fax_use_ecm',
+        ], true);
+    }
+
+    private function dedupeChannelVariables(array $variables): array
+    {
+        $deduped = [];
+        $seen = [];
+
+        foreach ($variables as $variable) {
+            $name = trim(strtok((string) $variable, '='));
+
+            if ($name === '' || isset($seen[$name])) {
+                continue;
+            }
+
+            $seen[$name] = true;
+            $deduped[] = $variable;
+        }
+
+        return $deduped;
     }
 }

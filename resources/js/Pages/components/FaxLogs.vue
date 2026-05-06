@@ -148,7 +148,7 @@
                                         </div>
                                     </td>
                                     <td class="whitespace-nowrap px-6 py-2 text-sm text-gray-500">
-                                        {{ row.fax_file?.fax_caller_id_number_formatted ?? '' }}
+                                        {{ faxSource(row) }}
                                     </td>
                                     <td class="whitespace-nowrap px-6 py-2 text-sm text-gray-500">
                                         {{ faxDestination(row) }}
@@ -206,7 +206,7 @@
                                             <div class="rounded-md border border-gray-200 bg-white p-4">
                                                 <div class="text-sm font-semibold text-gray-900 mb-2">Transmission</div>
                                                 <div class="space-y-2 text-sm text-gray-600">
-                                                    <div><span class="font-medium text-gray-700">From:</span> {{ displayValue(row.fax_file?.fax_caller_id_number_formatted) }}</div>
+                                                    <div><span class="font-medium text-gray-700">From:</span> {{ displayValue(faxSource(row)) }}</div>
                                                     <div><span class="font-medium text-gray-700">To:</span> {{ displayValue(faxDestination(row)) }}</div>
                                                     <div><span class="font-medium text-gray-700">Local Station ID:</span> {{ displayValue(row.fax_local_station_id) }}</div>
                                                     <div><span class="font-medium text-gray-700">Transfer Rate:</span> {{ displayValue(row.fax_transfer_rate) }}</div>
@@ -442,7 +442,15 @@ const executeBulkDelete = (items = selectedItems.value) => {
         });
 };
 
+const faxSource = (row) => {
+    return row.source_formatted ?? row.source ?? row.fax_file?.fax_caller_id_number_formatted ?? "";
+};
+
 const faxDestination = (row) => {
+    if (row.destination_formatted || row.destination) {
+        return row.destination_formatted ?? row.destination;
+    }
+
     if (row.fax_file?.fax_mode === "rx") {
         return row.fax?.fax_caller_id_number_formatted ?? row.fax_file?.fax_caller_id_number_formatted ?? "";
     }

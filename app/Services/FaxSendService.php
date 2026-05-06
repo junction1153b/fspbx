@@ -61,7 +61,19 @@ class FaxSendService
 
             $faxServer = $instance->getFaxServerInstance($payload);
 
-            // Create all fax directories 
+            // Normalize the destination to E.164 using the tenant's country
+            // setting. Webhook profiles already do this before calling send(),
+            // but the dashboard / future API callers may pass a raw number.
+            // formatPhoneNumber is idempotent on already-E.164 input.
+            if (is_object($faxServer)) {
+                $payload['fax_destination'] = formatPhoneNumber(
+                    $payload['fax_destination'] ?? '',
+                    get_domain_setting('country', $faxServer->domain_uuid) ?? 'US',
+                    \libphonenumber\PhoneNumberFormat::E164
+                );
+            }
+
+            // Create all fax directories
             $instance->CreateFaxDirectories($faxServer);
 
             // Remove HTML tags

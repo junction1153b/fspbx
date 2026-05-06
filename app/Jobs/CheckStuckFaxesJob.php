@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\FaxLogs;
 use App\Models\OutboundFax;
 use App\Services\FreeswitchEslService;
 use Illuminate\Bus\Queueable;
@@ -9,6 +10,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -71,7 +73,7 @@ class CheckStuckFaxesJob implements ShouldQueue
 
         $this->phaseA($esl);
         $this->phaseB();
-        $this->phaseC();
+        $this->phaseC($esl);
         $this->phaseD();
 
         fax_webhook_debug('CheckStuckFaxesJob done');
@@ -86,6 +88,19 @@ class CheckStuckFaxesJob implements ShouldQueue
             ->whereNotNull('call_uuid')
             ->where('retry_at', '<', now()->subSeconds(self::SENDING_GRACE_SECONDS))
             ->limit(50)
+            ->select([
+                'outbound_fax_uuid',
+                'domain_uuid',
+                'fax_uuid',
+                'source',
+                'destination',
+                'file_path',
+                'retry_count',
+                'retry_limit',
+                'retry_at',
+                'call_uuid',
+                'current_attempt_uuid',
+            ])
             ->get();
 
         if ($rows->isEmpty()) {
@@ -129,6 +144,11 @@ class CheckStuckFaxesJob implements ShouldQueue
                     ->update(['status' => 'trying']);
 
                 if ($reset > 0) {
+                    $this->writeSyntheticFaxLog(
+                        fax: $fax,
+                        faxResultText: 'FreeSWITCH call ended before fax webhook was received',
+                    );
+
                     SendFaxJob::dispatch($fax->outbound_fax_uuid);
                 }
             }
@@ -148,7 +168,18 @@ class CheckStuckFaxesJob implements ShouldQueue
             ->whereNull('call_uuid')
             ->where('retry_at', '<', now()->subSeconds(self::SENDING_GRACE_SECONDS))
             ->limit(50)
-            ->get(['outbound_fax_uuid']);
+            ->get([
+                'outbound_fax_uuid',
+                'domain_uuid',
+                'fax_uuid',
+                'source',
+                'destination',
+                'file_path',
+                'retry_count',
+                'retry_limit',
+                'retry_at',
+                'current_attempt_uuid',
+            ]);
 
         foreach ($rows as $fax) {
             $reset = OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
@@ -157,6 +188,11 @@ class CheckStuckFaxesJob implements ShouldQueue
                 ->update(['status' => 'trying']);
 
             if ($reset > 0) {
+                $this->writeSyntheticFaxLog(
+                    fax: $fax,
+                    faxResultText: 'Fax attempt stuck without a FreeSWITCH call UUID',
+                );
+
                 fax_webhook_debug('CheckStuckFaxesJob phaseB: redispatching (no call_uuid)', [
                     'outbound_fax_uuid' => $fax->outbound_fax_uuid,
                 ]);
@@ -170,14 +206,27 @@ class CheckStuckFaxesJob implements ShouldQueue
      * per-page budget, mark it failed — a real fax transmission would have
      * completed by now.
      */
-    private function phaseC(): void
+    private function phaseC(FreeswitchEslService $esl): void
     {
         // Pull candidates older than the absolute floor; budget check is
         // per-row in PHP since the threshold depends on total_pages.
         $rows = OutboundFax::where('status', 'sending')
             ->where('retry_at', '<', now()->subSeconds(self::PHASE_C_MIN_SECONDS))
             ->limit(100)
-            ->get(['outbound_fax_uuid', 'total_pages', 'retry_at']);
+            ->get([
+                'outbound_fax_uuid',
+                'domain_uuid',
+                'fax_uuid',
+                'source',
+                'destination',
+                'file_path',
+                'retry_count',
+                'retry_limit',
+                'retry_at',
+                'call_uuid',
+                'current_attempt_uuid',
+                'total_pages',
+            ]);
 
         foreach ($rows as $fax) {
             $budget = $fax->total_pages
@@ -189,21 +238,39 @@ class CheckStuckFaxesJob implements ShouldQueue
                 continue;
             }
 
+            if (!$this->killFreeswitchCall($esl, $fax)) {
+                continue;
+            }
+
+            $retriesLeft = $fax->retry_count < $fax->retry_limit;
+
             $marked = OutboundFax::where('outbound_fax_uuid', $fax->outbound_fax_uuid)
                 ->where('status', 'sending')
                 ->update([
-                    'status'   => 'failed',
-                    'response' => 'CheckStuckFaxesJob: exceeded per-page budget without webhook',
+                    'status'   => $retriesLeft ? 'trying' : 'failed',
+                    'response' => 'CheckStuckFaxesJob: exceeded per-page budget without webhook; killed stuck FreeSWITCH call',
                 ]);
 
             if ($marked > 0) {
-                fax_webhook_debug('CheckStuckFaxesJob phaseC: hard-timeout, marking failed', [
+                $this->writeSyntheticFaxLog(
+                    fax: $fax,
+                    faxResultText: 'Exceeded fax send timeout without fax webhook; killed stuck FreeSWITCH call',
+                );
+
+                fax_webhook_debug('CheckStuckFaxesJob phaseC: hard-timeout, killed stuck call', [
                     'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                    'call_uuid'         => $fax->call_uuid,
                     'sending_for_secs'  => $sendingFor,
                     'budget_secs'       => $budget,
                     'total_pages'       => $fax->total_pages,
+                    'retries_left'      => $retriesLeft,
                 ]);
-                SendFaxNotificationJob::dispatch($fax->outbound_fax_uuid);
+
+                if ($retriesLeft) {
+                    SendFaxJob::dispatch($fax->outbound_fax_uuid);
+                } else {
+                    SendFaxNotificationJob::dispatch($fax->outbound_fax_uuid);
+                }
             }
         }
     }
@@ -228,6 +295,82 @@ class CheckStuckFaxesJob implements ShouldQueue
                 'outbound_fax_uuid' => $fax->outbound_fax_uuid,
             ]);
             SendFaxJob::dispatch($fax->outbound_fax_uuid);
+        }
+    }
+
+    /**
+     * Record attempts recovered by the reaper when FreeSWITCH never posted the
+     * normal fax hangup webhook. One log row per current_attempt_uuid keeps the
+     * retry history readable without duplicating late webhook rows.
+     */
+    private function writeSyntheticFaxLog(OutboundFax $fax, string $faxResultText): ?FaxLogs
+    {
+        if ($fax->current_attempt_uuid) {
+            $exists = FaxLogs::query()
+                ->where('outbound_fax_attempt_uuid', $fax->current_attempt_uuid)
+                ->exists();
+
+            if ($exists) {
+                return null;
+            }
+        }
+
+        $log = new FaxLogs();
+        $log->fax_log_uuid                   = (string) Str::uuid();
+        $log->domain_uuid                    = $fax->domain_uuid;
+        $log->fax_uuid                       = $fax->fax_uuid;
+        $log->outbound_fax_uuid              = $fax->outbound_fax_uuid;
+        $log->outbound_fax_attempt_uuid      = $fax->current_attempt_uuid;
+        $log->source                         = $fax->source;
+        $log->destination                    = $fax->destination;
+        $log->fax_success                    = '0';
+        $log->fax_result_text                = $faxResultText;
+        $log->fax_file                       = $fax->file_path;
+        $log->fax_retry_attempts             = $fax->retry_count;
+        $log->fax_retry_limit                = $fax->retry_limit;
+        $log->fax_duration                   = 0;
+        $log->fax_date                       = now();
+        $log->fax_epoch                      = time();
+        $log->save();
+
+        fax_webhook_debug('CheckStuckFaxesJob: wrote synthetic v_fax_logs row', [
+            'fax_log_uuid'      => $log->fax_log_uuid,
+            'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+            'fax_attempt'       => (int) $fax->retry_count,
+            'fax_result_text'   => $faxResultText,
+        ]);
+
+        return $log;
+    }
+
+    private function killFreeswitchCall(FreeswitchEslService $esl, OutboundFax $fax): bool
+    {
+        if (!$fax->call_uuid) {
+            return true;
+        }
+
+        try {
+            if (!$esl->isConnected()) {
+                $esl->reconnect();
+            }
+
+            $reply = (string) $esl->executeCommand('uuid_kill ' . $fax->call_uuid, false);
+
+            fax_webhook_debug('CheckStuckFaxesJob phaseC: uuid_kill sent', [
+                'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                'call_uuid'         => $fax->call_uuid,
+                'reply'             => trim($reply),
+            ]);
+
+            return true;
+        } catch (Throwable $e) {
+            fax_webhook_debug('CheckStuckFaxesJob phaseC: uuid_kill failed, leaving row sending', [
+                'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                'call_uuid'         => $fax->call_uuid,
+                'error'             => $e->getMessage(),
+            ]);
+
+            return false;
         }
     }
 }

@@ -3,13 +3,13 @@
 namespace App\Jobs;
 
 use App\Models\FaxLogs;
+use App\Models\FaxFiles;
 use App\Models\OutboundFax;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 
 /**
@@ -50,103 +50,103 @@ class HandleFaxTxEventJob implements ShouldQueue
 
     public function handle(): void
     {
-        Redis::throttle('fax')->allow(2)->every(1)->then(function () {
-            $outboundFaxUuid = $this->data['outbound_fax_uuid'] ?? null;
-            $attemptUuid     = $this->data['outbound_fax_attempt_uuid'] ?? null;
+        $outboundFaxUuid = $this->data['outbound_fax_uuid'] ?? null;
+        $attemptUuid     = $this->data['outbound_fax_attempt_uuid'] ?? null;
 
-            if (!$outboundFaxUuid) {
-                fax_webhook_debug('HandleFaxTxEventJob: missing outbound_fax_uuid, dropping', $this->data);
-                return;
-            }
+        if (!$outboundFaxUuid) {
+            fax_webhook_debug('HandleFaxTxEventJob: missing outbound_fax_uuid, dropping', $this->data);
+            return;
+        }
 
-            $fax = OutboundFax::find($outboundFaxUuid);
-            if (!$fax) {
-                fax_webhook_debug('HandleFaxTxEventJob: outbound_fax row not found', [
-                    'outbound_fax_uuid' => $outboundFaxUuid,
-                ]);
-                return;
-            }
-
-            // Anti-stale: ignore webhooks from attempts the row has moved past.
-            // (The reaper may have superseded an orphaned earlier attempt; that
-            //  earlier call eventually hung up and posted a stale webhook.)
-            if ($attemptUuid && $fax->current_attempt_uuid && $attemptUuid !== $fax->current_attempt_uuid) {
-                fax_webhook_debug('HandleFaxTxEventJob: stale attempt webhook, ignoring', [
-                    'outbound_fax_uuid'        => $outboundFaxUuid,
-                    'webhook_attempt_uuid'     => $attemptUuid,
-                    'row_current_attempt_uuid' => $fax->current_attempt_uuid,
-                ]);
-                return;
-            }
-
-            // Already at a terminal state — duplicate webhook, skip.
-            if ($fax->isTerminal()) {
-                fax_webhook_debug('HandleFaxTxEventJob: row already terminal, ignoring', [
-                    'outbound_fax_uuid' => $outboundFaxUuid,
-                    'status'            => $fax->status,
-                ]);
-                return;
-            }
-
-            // Always write the attempt log first — the troubleshooting history
-            // needs to capture every attempt regardless of next decision.
-            $this->writeFaxLog($fax);
-
-            // Decide next step from the wire outcome.
-            $faxSuccess  = (string) ($this->data['fax_success'] ?? '0');
-            $isBusy      = $this->isBusyResult($this->data);
-            $retriesLeft = $fax->retry_count < $fax->retry_limit;
-
-            if ($faxSuccess === '1') {
-                fax_webhook_debug('HandleFaxTxEventJob: fax succeeded', [
-                    'outbound_fax_uuid'           => $outboundFaxUuid,
-                    'pages_transferred'           => $this->data['fax_document_transferred_pages'] ?? null,
-                    'pages_total'                 => $this->data['fax_document_total_pages'] ?? null,
-                ]);
-
-                $fax->update(['status' => 'sent']);
-                SendFaxNotificationJob::dispatch($outboundFaxUuid);
-                return;
-            }
-
-            if (!$retriesLeft) {
-                fax_webhook_debug('HandleFaxTxEventJob: retries exhausted, marking failed', [
-                    'outbound_fax_uuid' => $outboundFaxUuid,
-                    'retry_count'       => $fax->retry_count,
-                    'retry_limit'       => $fax->retry_limit,
-                    'fax_result_code'   => $this->data['fax_result_code'] ?? null,
-                    'fax_result_text'   => $this->data['fax_result_text'] ?? null,
-                ]);
-
-                $fax->update(['status' => 'failed']);
-                SendFaxNotificationJob::dispatch($outboundFaxUuid);
-                return;
-            }
-
-            // Schedule the retry. Backoff grows with each subsequent attempt
-            // so we don't pummel a misbehaving receiver.
-            $delaySeconds = self::RETRY_BASE_SECONDS
-                + (self::RETRY_BACKOFF_STEP * max(0, (int) $fax->retry_count - 1));
-
-            // Mark the row pending — busy is tracked separately so the dashboard
-            // can show "line was busy" vs. a generic transmission failure.
-            $fax->update([
-                'status'   => $isBusy ? 'busy' : 'trying',
-                'retry_at' => now(),
-            ]);
-
-            fax_webhook_debug('HandleFaxTxEventJob: scheduling retry', [
+        $fax = OutboundFax::find($outboundFaxUuid);
+        if (!$fax) {
+            fax_webhook_debug('HandleFaxTxEventJob: outbound_fax row not found', [
                 'outbound_fax_uuid' => $outboundFaxUuid,
-                'next_attempt'      => $fax->retry_count + 1,
-                'delay_seconds'     => $delaySeconds,
-                'is_busy'           => $isBusy,
-                'fax_result_code'   => $this->data['fax_result_code'] ?? null,
+            ]);
+            return;
+        }
+
+        // Anti-stale: ignore webhooks from attempts the row has moved past.
+        // (The reaper may have superseded an orphaned earlier attempt; that
+        //  earlier call eventually hung up and posted a stale webhook.)
+        if ($attemptUuid && $fax->current_attempt_uuid && $attemptUuid !== $fax->current_attempt_uuid) {
+            fax_webhook_debug('HandleFaxTxEventJob: stale attempt webhook, ignoring', [
+                'outbound_fax_uuid'        => $outboundFaxUuid,
+                'webhook_attempt_uuid'     => $attemptUuid,
+                'row_current_attempt_uuid' => $fax->current_attempt_uuid,
+            ]);
+            return;
+        }
+
+        // Already at a terminal state — duplicate webhook, skip.
+        if ($fax->isTerminal()) {
+            fax_webhook_debug('HandleFaxTxEventJob: row already terminal, ignoring', [
+                'outbound_fax_uuid' => $outboundFaxUuid,
+                'status'            => $fax->status,
+            ]);
+            return;
+        }
+
+        // Always write the attempt log first — the troubleshooting history
+        // needs to capture every attempt regardless of next decision.
+        $log = $this->writeFaxLog($fax);
+
+        // Decide next step from the wire outcome.
+        $faxSuccess  = (string) ($this->data['fax_success'] ?? '0');
+        $isBusy      = $this->isBusyResult($this->data);
+        $retriesLeft = $fax->retry_count < $fax->retry_limit;
+
+        if ($faxSuccess === '1') {
+            $this->writeFaxFile($fax, $log);
+
+            fax_webhook_debug('HandleFaxTxEventJob: fax succeeded', [
+                'outbound_fax_uuid' => $outboundFaxUuid,
+                'pages_transferred' => $this->data['fax_document_transferred_pages'] ?? null,
+                'pages_total'       => $this->data['fax_document_total_pages'] ?? null,
             ]);
 
-            SendFaxJob::dispatch($outboundFaxUuid)->delay(now()->addSeconds($delaySeconds));
-        }, function () {
-            $this->release(5);
-        });
+            $fax->update(['status' => 'sent']);
+            SendFaxNotificationJob::dispatch($outboundFaxUuid);
+            return;
+        }
+
+        if (!$retriesLeft) {
+            fax_webhook_debug('HandleFaxTxEventJob: retries exhausted, marking failed', [
+                'outbound_fax_uuid' => $outboundFaxUuid,
+                'retry_count'       => $fax->retry_count,
+                'retry_limit'       => $fax->retry_limit,
+                'fax_result_code'   => $this->data['fax_result_code'] ?? null,
+                'fax_result_text'   => $this->data['fax_result_text'] ?? null,
+            ]);
+
+            $fax->update(['status' => 'failed']);
+            SendFaxNotificationJob::dispatch($outboundFaxUuid);
+            return;
+        }
+
+        // Schedule the retry. Backoff grows with each subsequent attempt
+        // so we don't pummel a misbehaving receiver.
+        $delaySeconds = self::RETRY_BASE_SECONDS
+            + (self::RETRY_BACKOFF_STEP * max(0, (int) $fax->retry_count - 1));
+
+        // Mark the row pending — busy is tracked separately so the dashboard
+        // can show "line was busy" vs. a generic transmission failure.
+        $fax->update([
+            'status'   => $isBusy ? 'busy' : 'trying',
+            'retry_at' => now(),
+        ]);
+
+        fax_webhook_debug('HandleFaxTxEventJob: scheduling retry', [
+            'outbound_fax_uuid' => $outboundFaxUuid,
+            'fax_attempt'       => (int) $fax->retry_count,
+            'next_attempt'      => (int) $fax->retry_count + 1,
+            'delay_seconds'     => $delaySeconds,
+            'is_busy'           => $isBusy,
+            'fax_result_code'   => $this->data['fax_result_code'] ?? null,
+            'fax_result_text'   => $this->data['fax_result_text'] ?? null,
+        ]);
+
+        SendFaxJob::dispatch($outboundFaxUuid)->delay(now()->addSeconds($delaySeconds));
     }
 
     /**
@@ -185,14 +185,55 @@ class HandleFaxTxEventJob implements ShouldQueue
         $log->fax_epoch                      = $this->numericOrNull($this->data['end_epoch'] ?? null) ?? time();
         $log->save();
 
-        fax_webhook_debug('HandleFaxTxEventJob: wrote v_fax_logs row', [
+        fax_webhook_debug('HandleFaxTxEventJob: wrote new fax log', [
             'fax_log_uuid'      => $log->fax_log_uuid,
             'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+            'fax_attempt'       => (int) $fax->retry_count,
             'fax_success'       => $log->fax_success,
             'fax_result_code'   => $log->fax_result_code,
         ]);
 
         return $log;
+    }
+
+    private function writeFaxFile(OutboundFax $fax, FaxLogs $log): ?FaxFiles
+    {
+        if (!$log->fax_file || !$log->fax_uuid) {
+            fax_webhook_debug('HandleFaxTxEventJob: successful fax has no file path, skipping fax file row', [
+                'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+                'fax_log_uuid'      => $log->fax_log_uuid,
+                'fax_file'          => $log->fax_file,
+            ]);
+
+            return null;
+        }
+
+        $file = FaxFiles::find($log->fax_log_uuid);
+
+        if (!$file) {
+            $file = new FaxFiles();
+            $file->fax_file_uuid = $log->fax_log_uuid;
+        }
+
+        $file->domain_uuid = $log->domain_uuid;
+        $file->fax_uuid = $log->fax_uuid;
+        $file->fax_mode = 'tx';
+        $file->fax_destination = $log->destination;
+        $file->fax_file_type = pathinfo($log->fax_file, PATHINFO_EXTENSION) ?: 'tif';
+        $file->fax_file_path = $log->fax_file;
+        $file->fax_caller_id_name = $fax->source_name;
+        $file->fax_caller_id_number = $log->source;
+        $file->fax_date = $log->fax_date;
+        $file->fax_epoch = $log->fax_epoch;
+        $file->save();
+
+        fax_webhook_debug('HandleFaxTxEventJob: wrote sent fax file row', [
+            'fax_file_uuid'    => $file->fax_file_uuid,
+            'outbound_fax_uuid' => $fax->outbound_fax_uuid,
+            'fax_file'         => $file->fax_file_path,
+        ]);
+
+        return $file;
     }
 
     /**

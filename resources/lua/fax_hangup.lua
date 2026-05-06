@@ -32,6 +32,18 @@ local function clean(value)
     return value
 end
 
+local function first_present(...)
+    local values = {...}
+    for _, value in ipairs(values) do
+        value = tostring(value or "")
+        if value ~= "" then
+            return value
+        end
+    end
+
+    return ""
+end
+
 local uuid = clean(header("uuid"))
 local domain_uuid = clean(header("domain_uuid"))
 local domain_name = clean(header("domain_name"))
@@ -61,11 +73,19 @@ local fax_file = clean(header("fax_file", "fax_filename"))
 
 local caller_id_name = clean(header("caller_id_name", "Caller-Caller-ID-Name"))
 local caller_id_number = clean(header("caller_id_number", "Caller-Caller-ID-Number"))
+local caller_destination = clean(header("caller_destination", "Caller-Destination-Number"))
 local sip_to_user = clean(header("sip_to_user"))
--- destination_number is the dialed number for both inbound (DID) and outbound
--- (number we faxed to). Falls back to sip_to_user for legacy call topologies
--- where destination_number isn't populated.
-local destination_number = clean(header("destination_number", "sip_to_user"))
+local channel_destination_number = clean(header("destination_number"))
+local destination_number = channel_destination_number
+
+if call_direction == "inbound" then
+    destination_number = first_present(caller_destination, sip_to_user, channel_destination_number)
+elseif call_direction == "outbound" then
+    destination_number = first_present(caller_destination, channel_destination_number, sip_to_user)
+else
+    destination_number = first_present(channel_destination_number, caller_destination, sip_to_user)
+end
+
 local bridge_hangup_cause = clean(header("bridge_hangup_cause"))
 local hangup_cause = clean(header("hangup_cause"))
 local hangup_cause_q850 = clean(header("hangup_cause_q850"))
@@ -80,8 +100,22 @@ if fax_success == "" then
     fax_success = "0"
 end
 
+if fax_result_code == "" and hangup_cause_q850 ~= "" then
+    fax_result_code = hangup_cause_q850
+end
+
 if fax_result_text == "" then
-    fax_result_text = "FS_NOT_SET"
+    local call_result_text = first_present(hangup_cause, bridge_hangup_cause)
+
+    if call_result_text ~= "" and hangup_cause_q850 ~= "" then
+        fax_result_text = call_result_text .. " (Q.850 " .. hangup_cause_q850 .. ")"
+    elseif call_result_text ~= "" then
+        fax_result_text = call_result_text
+    elseif hangup_cause_q850 ~= "" then
+        fax_result_text = "Q.850 " .. hangup_cause_q850
+    else
+        fax_result_text = "FS_NOT_SET"
+    end
 end
 
 local event_name = "fax.completed"
@@ -122,8 +156,10 @@ local payload_table = {
 
         caller_id_name = caller_id_name,
         caller_id_number = caller_id_number,
+        caller_destination = caller_destination,
         sip_to_user = sip_to_user,
         destination_number = destination_number,
+        channel_destination_number = channel_destination_number,
 
         bridge_hangup_cause = bridge_hangup_cause,
         hangup_cause = hangup_cause,

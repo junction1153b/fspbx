@@ -66,19 +66,19 @@
                 </template>
 
                 <template #table-body>
-                    <tr v-for="row in recentOutboundFaxes.data" :key="row.fax_queue_uuid">
+                    <tr v-for="row in recentOutboundFaxes.data" :key="row.outbound_fax_uuid">
                         <!-- Checkbox + From -->
                         <TableField class="whitespace-nowrap px-4 py-2 text-sm text-gray-500">
                             <div class="flex items-center">
                                 <div class="ml-2">
-                                    {{ row.fax_caller_id_number_formatted }}
+                                    {{ row.source_formatted ?? row.source ?? '' }}
                                 </div>
                             </div>
                         </TableField>
 
                         <!-- To -->
                         <TableField class="whitespace-nowrap px-2 py-2 text-sm text-gray-500">
-                            {{ row.fax_number_formatted }}
+                            {{ row.destination_formatted ?? row.destination ?? '' }}
                         </TableField>
 
                         <!-- Date -->
@@ -88,10 +88,10 @@
 
                         <!-- Status -->
                         <TableField class="px-2 py-2 text-sm">
-                            <Badge :text="row.fax_status"
-                                :backgroundColor="determineColor(row.fax_status).backgroundColor"
-                                :textColor="determineColor(row.fax_status).textColor"
-                                :ringColor="determineColor(row.fax_status).ringColor" />
+                            <Badge :text="row.status"
+                                :backgroundColor="determineColor(row.status).backgroundColor"
+                                :textColor="determineColor(row.status).textColor"
+                                :ringColor="determineColor(row.status).ringColor" />
                         </TableField>
 
 
@@ -138,15 +138,15 @@
                 </template>
 
                 <template #table-body>
-                    <tr v-for="row in recentInboundFaxes.data" :key="row.fax_file_uuid">
+                    <tr v-for="row in recentInboundFaxes.data" :key="row.fax_log_uuid">
                         <!-- From -->
                         <TableField class="whitespace-nowrap px-4 py-2 text-sm text-gray-500">
-                            {{ row.fax_caller_id_number_formatted }}
+                            {{ row.source_formatted ?? row.source ?? '' }}
                         </TableField>
 
-                        <!-- To (extension) -->
+                        <!-- To -->
                         <TableField class="whitespace-nowrap px-2 py-2 text-sm text-gray-500">
-                            {{ row.fax?.fax_caller_id_number_formatted ?? '-' }}
+                            {{ row.destination_formatted ?? row.destination ?? '' }}
                         </TableField>
 
                         <!-- Date -->
@@ -162,7 +162,7 @@
 
                 <template #empty>
                     <!-- Conditional rendering for 'no records' message -->
-                    <div v-if="!recentOutboundLoading && recentInboundFaxes?.data?.length === 0"
+                    <div v-if="!recentInboundLoading && recentInboundFaxes?.data?.length === 0"
                         class="text-center my-5 ">
                         <MagnifyingGlassIcon class="mx-auto h-12 w-12 text-gray-400" />
                         <h3 class="mt-2 text-sm font-semibold text-gray-900">No results found</h3>
@@ -173,7 +173,7 @@
                 </template>
 
                 <template #loading>
-                    <Loading :show="recentOutboundLoading" />
+                    <Loading :show="recentInboundLoading" />
                 </template>
 
 
@@ -861,6 +861,12 @@ const determineColor = (status) => {
                 backgroundColor: 'bg-cyan-50',
                 textColor: 'text-cyan-700',
                 ringColor: 'ring-cyan-600/20'
+            };
+        case 'busy':
+            return {
+                backgroundColor: 'bg-amber-50',
+                textColor: 'text-amber-700',
+                ringColor: 'ring-amber-600/20'
             };
         case 'failed':
             return {

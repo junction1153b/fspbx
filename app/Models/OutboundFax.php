@@ -2,10 +2,12 @@
 
 namespace App\Models;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use libphonenumber\PhoneNumberFormat;
 
 /**
  * Outbound fax queue + record. One row per fax (not per attempt).
@@ -31,6 +33,12 @@ class OutboundFax extends Model
     protected $keyType = 'string';
 
     public $timestamps = true;
+
+    protected $appends = [
+        'fax_date_formatted',
+        'source_formatted',
+        'destination_formatted',
+    ];
 
     protected $fillable = [
         'domain_uuid',
@@ -82,6 +90,44 @@ class OutboundFax extends Model
     {
         return $this->hasMany(FaxLogs::class, 'outbound_fax_uuid', 'outbound_fax_uuid')
             ->orderBy('fax_date');
+    }
+
+    public function getFaxDateFormattedAttribute(): ?string
+    {
+        if (!$this->created_at || !$this->domain_uuid) {
+            return null;
+        }
+
+        $timeZone = get_local_time_zone($this->domain_uuid);
+
+        return Carbon::parse($this->created_at, 'UTC')
+            ->setTimezone($timeZone)
+            ->format('g:i:s A M d, Y');
+    }
+
+    public function getSourceFormattedAttribute(): ?string
+    {
+        return $this->formatNumberForDomain($this->source);
+    }
+
+    public function getDestinationFormattedAttribute(): ?string
+    {
+        return $this->formatNumberForDomain($this->destination);
+    }
+
+    private function formatNumberForDomain(?string $number): ?string
+    {
+        if (empty($number)) {
+            return null;
+        }
+
+        $countryCode = $this->domain_uuid
+            ? get_domain_setting('country', $this->domain_uuid)
+            : null;
+
+        return $countryCode
+            ? formatPhoneNumber($number, $countryCode, PhoneNumberFormat::NATIONAL)
+            : $number;
     }
 
     public function isTerminal(): bool

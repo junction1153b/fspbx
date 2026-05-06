@@ -150,9 +150,9 @@
               <template #default>
                 <span
                   class="inline-flex items-center rounded-md px-2 py-1 text-xs font-semibold"
-                  :class="row.fax_success == '1' ? 'bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20' : 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20'"
+                  :class="statusBadge(row).classes"
                 >
-                  {{ row.fax_success == "1" ? 'Success' : 'Failed' }}
+                  {{ statusBadge(row).text }}
                 </span>
               </template>
             </TableField>
@@ -481,6 +481,53 @@ const canRetry = (row) => {
     String(row?.fax_success ?? "0") !== "1" &&
     row?.outbound_fax?.status === "failed"
   );
+};
+
+const isRetryRequestedFromRow = (row) => {
+  return Boolean(
+    row?.fax_log_uuid &&
+    row?.outbound_fax?.response?.includes(`Manual retry requested from fax log ${row.fax_log_uuid}`)
+  );
+};
+
+const statusBadge = (row) => {
+  if (String(row?.fax_success ?? "0") === "1") {
+    return {
+      text: "Success",
+      classes: "bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20",
+    };
+  }
+
+  if (isRetryRequestedFromRow(row)) {
+    switch (row?.outbound_fax?.status) {
+      case "waiting":
+        return {
+          text: "Retry queued",
+          classes: "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20",
+        };
+      case "sending":
+        return {
+          text: "Sending",
+          classes: "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-600/20",
+        };
+      case "trying":
+      case "busy":
+        return {
+          text: "Retrying",
+          classes: "bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-600/20",
+        };
+      case "sent":
+        return {
+          text: "Retried",
+          classes: "bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20",
+        };
+    }
+  }
+
+  return {
+    text: "Failed",
+    classes: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20",
+  };
 };
 
 const fileBase = (path) => {

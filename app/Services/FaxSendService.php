@@ -197,6 +197,7 @@ class FaxSendService
 
             fax_webhook_debug('FaxSendService row created', [
                 'outbound_fax_uuid' => $outboundFax->outbound_fax_uuid,
+                'prefix'            => $outboundFax->prefix,
                 'destination'       => $outboundFax->destination,
                 'total_pages'       => $outboundFax->total_pages,
             ]);

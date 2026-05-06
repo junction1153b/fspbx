@@ -231,6 +231,11 @@ class SendFaxJob implements ShouldQueue
         $domainName = $faxServer?->domain?->domain_name ?? '';
         $tollAllow  = $faxServer?->fax_toll_allow ?? '';
         $faxEmail   = $faxServer?->fax_email ?? '';
+        $prefix     = trim((string) ($fax->prefix ?? ''));
+
+        if ($prefix === '') {
+            $prefix = trim((string) ($faxServer?->fax_prefix ?? ''));
+        }
 
         $channelVariables = [];
         if (!empty($tollAllow)) {
@@ -239,17 +244,24 @@ class SendFaxJob implements ShouldQueue
 
         $routeResult = outbound_route_to_bridge(
             $fax->domain_uuid,
-            ($fax->prefix ?? '') . $fax->destination,
+            $fax->destination,
             $channelVariables,
+            true,
+            $prefix,
             true
         );
 
         $routes = $routeResult['bridges'] ?? [];
+        $routeDestination = $routeResult['route_destination'] ?? ($prefix . $fax->destination);
+        $fallbackUsed = (bool) ($routeResult['fallback_used'] ?? false);
 
         if (empty($routes)) {
             fax_webhook_debug('No outbound fax route matched', [
-                'domain_uuid' => $fax->domain_uuid,
-                'destination' => ($fax->prefix ?? '') . $fax->destination,
+                'domain_uuid'       => $fax->domain_uuid,
+                'prefix'            => $prefix,
+                'destination'       => $fax->destination,
+                'route_destination' => $routeDestination,
+                'fallback_tried'    => $prefix !== '',
                 'channel_variables' => $channelVariables,
             ]);
 
@@ -260,11 +272,15 @@ class SendFaxJob implements ShouldQueue
         $selectedRoute = $routeResult['selected_route'] ?? null;
 
         fax_webhook_debug('Selected fax route', [
-            'route_name' => $selectedRoute['dialplan_name'] ?? null,
-            'route_uuid' => $selectedRoute['dialplan_uuid'] ?? null,
-            'route_order' => $selectedRoute['dialplan_order'] ?? null,
-            'fax_uri' => $faxUri,
-            'lua_actions' => $selectedRoute['lua_actions'] ?? [],
+            'route_name'        => $selectedRoute['dialplan_name'] ?? null,
+            'route_uuid'        => $selectedRoute['dialplan_uuid'] ?? null,
+            'route_order'       => $selectedRoute['dialplan_order'] ?? null,
+            'prefix'            => $prefix,
+            'destination'       => $fax->destination,
+            'route_destination' => $routeDestination,
+            'fallback_used'     => $fallbackUsed,
+            'fax_uri'           => $faxUri,
+            'lua_actions'       => $selectedRoute['lua_actions'] ?? [],
         ]);
 
         $e = fn($val) => str_replace(["'", '{', '}'], ["\\'", '', ''], (string) $val);

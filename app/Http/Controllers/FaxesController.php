@@ -484,6 +484,7 @@ class FaxesController extends Controller
         $phone_numbers = QueryBuilder::for(Faxes::class)
             ->allowedSorts('fax_caller_id_number')
             ->where('domain_uuid', $currentDomain)
+            ->defaultSort('fax_caller_id_number')
             ->get([
                 'fax_uuid',
                 'fax_caller_id_number',
@@ -492,7 +493,7 @@ class FaxesController extends Controller
             // ->each->append('label', 'destination_number_e164')
             ->map(function ($fax) {
                 return [
-                    'value' => $fax->fax_caller_id_number,
+                    'value' => $fax->fax_uuid,
                     'label' => $fax->fax_caller_id_number_formatted . ' - ' . $fax->fax_name,
                 ];
             })
@@ -1144,13 +1145,15 @@ class FaxesController extends Controller
             // logger($data['send_confirmation']);
 
             if (!isset($data['fax_uuid'])) {
-                $fax = Faxes::where('domain_uuid', session('domain_uuid'))
-                    ->where('fax_caller_id_number', $data['sender_fax_number'])
-                    ->first();
-                if (!$fax) {
-                    throw new \Exception("There was a problem scheduling your fax. Fax server not found.");
-                }
-                $data['fax_uuid'] = $fax->fax_uuid;
+                $data['fax_uuid'] = $data['sender_fax_number'];
+            }
+
+            $fax = Faxes::where('domain_uuid', session('domain_uuid'))
+                ->where('fax_uuid', $data['fax_uuid'])
+                ->first();
+
+            if (!$fax) {
+                throw new \Exception("There was a problem scheduling your fax. Fax server not found.");
             }
 
             // Persist uploads to the fax disk and build attachment metadata

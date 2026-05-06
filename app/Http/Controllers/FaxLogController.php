@@ -130,8 +130,10 @@ class FaxLogController extends Controller
                     $q->select([
                         'outbound_fax_uuid',
                         'status',
+                        'total_pages',
                         'retry_count',
                         'retry_limit',
+                        'response',
                     ]);
                 },
             ])

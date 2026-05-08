@@ -943,3 +943,4 @@ class DeviceController extends Controller
         return $permissions;
     }
 }
+//test3

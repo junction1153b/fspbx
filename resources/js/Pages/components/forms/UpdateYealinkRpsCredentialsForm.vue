@@ -4,6 +4,7 @@
         access_key_id: credentials?.access_key_id,
         access_key_secret: credentials?.access_key_secret,
         api_url: credentials?.api_url ?? 'https://us-api.ymcs.yealink.com',
+        require_serial_number: credentials?.require_serial_number ?? false,
     }" @success="handleSuccess" @error="handleError" @response="handleResponse">
         <StaticElement name="intro">
             <p class="text-sm text-gray-500">
@@ -21,6 +22,10 @@
 
         <TextElement name="access_key_secret" :label="$t('AccessKey Secret')"
             :attrs="{ type: 'password', autocomplete: 'new-password' }" />
+
+        <ToggleElement name="require_serial_number" :text="$t('Require serial number')"
+            :true-value="true" :false-value="false"
+            :description="$t('Enable for regular Yealink accounts that require a MAC address and serial number. Leave off if Yealink has authorized MAC-only registration.')" />
 
         <GroupElement name="buttons" />
 

@@ -14,6 +14,7 @@ use App\Services\PolycomCloudProvider;
 use App\Models\CloudProvisioningStatus;
 use App\Models\DeviceCloudProvisioning;
 use App\Services\CloudProviderSelector;
+use App\Services\YealinkRpsCloudProvider;
 use Illuminate\Support\Facades\Session;
 use App\Services\DeviceCloudProvisioningService;
 use App\Http\Requests\PairZtpOrganizationRequest;
@@ -653,6 +654,20 @@ class DeviceCloudProvisioningController extends Controller
                 ->whereIn('device_uuid', request('items'))
                 ->get();
 
+            $yealinkDevices = $items->where('device_vendor', 'yealink');
+            if ($yealinkDevices->isNotEmpty() && app(YealinkRpsCloudProvider::class)->requiresSerialNumber()) {
+                $errors = [];
+                foreach ($yealinkDevices as $device) {
+                    if (blank($device->serial_number)) {
+                        $errors[$device->device_uuid] = [$device->device_address . ': ' . __('Save a serial number on this device before adding it to Yealink RPS.')];
+                    }
+                }
+
+                if ($errors !== []) {
+                    return response()->json(['errors' => $errors, 'messages' => $errors], 422);
+                }
+            }
+
             foreach ($items as $device) {
 
                 $params = [
@@ -660,6 +675,7 @@ class DeviceCloudProvisioningController extends Controller
                     'domain_uuid' => $device->domain_uuid,
                     'device_vendor' => $device->device_vendor,
                     'device_address' => $device->device_address,
+                    'serial_number' => $device->serial_number,
                 ];
 
                 $job = (new DeviceCloudProvisioningService)->register($params);

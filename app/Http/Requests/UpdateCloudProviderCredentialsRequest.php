@@ -17,6 +17,7 @@ class UpdateCloudProviderCredentialsRequest extends FormRequest
     {
         return [
             'provider' => ['required', 'string', Rule::in(['polycom', 'yealink'])],
+            'require_serial_number' => ['sometimes', 'boolean'],
             'token' => ['nullable', 'required_if:provider,polycom', 'string'],
             'access_key_id' => ['nullable', 'required_if:provider,yealink', 'string', 'max:255'],
             'access_key_secret' => ['nullable', 'required_if:provider,yealink', 'string', 'max:255'],

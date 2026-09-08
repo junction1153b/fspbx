@@ -18,6 +18,11 @@ class YealinkRpsCloudProvider implements CloudProviderInterface
     protected int $timeout = 60;
     protected ?string $accessToken = null;
 
+    public function requiresSerialNumber(): bool
+    {
+        return $this->getCredentials()['require_serial_number'];
+    }
+
     public function getCredentials(): array
     {
         $settings = DefaultSettings::query()
@@ -27,10 +32,12 @@ class YealinkRpsCloudProvider implements CloudProviderInterface
                 'yealink_rps_access_key_id',
                 'yealink_rps_access_key_secret',
                 'yealink_rps_api_url',
+                'yealink_rps_require_serial_number',
             ])
             ->pluck('default_setting_value', 'default_setting_subcategory');
 
         return [
+            'require_serial_number' => filter_var($settings->get('yealink_rps_require_serial_number', 'false'), FILTER_VALIDATE_BOOLEAN),
             'access_key_id' => $settings->get('yealink_rps_access_key_id'),
             'access_key_secret' => $settings->get('yealink_rps_access_key_secret'),
             'api_url' => $settings->get('yealink_rps_api_url')
@@ -48,6 +55,13 @@ class YealinkRpsCloudProvider implements CloudProviderInterface
         );
 
         $this->accessToken = null;
+
+        if (array_key_exists('require_serial_number', $credentials)) {
+            $this->storeCredential(
+                'yealink_rps_require_serial_number',
+                filter_var($credentials['require_serial_number'], FILTER_VALIDATE_BOOLEAN) ? 'true' : 'false'
+            );
+        }
     }
 
     public function hasCredentials(): bool
@@ -97,16 +111,29 @@ class YealinkRpsCloudProvider implements CloudProviderInterface
 
     public function createDevice(array $params): array
     {
+        $requiresSerialNumber = $this->requiresSerialNumber();
+        $serialNumber = trim((string) ($params['serial_number'] ?? ''));
+
+        if ($requiresSerialNumber && $serialNumber === '') {
+            throw new RuntimeException(__('Save a serial number on this device before adding it to Yealink RPS.'));
+        }
+
         $serverId = static::getOrgIdByDomainUuid($params['domain_uuid']);
 
         if (blank($serverId)) {
             throw new RuntimeException('Yealink RPS server is not configured for this account.');
         }
 
-        $result = $this->requestJson('POST', '/v2/rps/addDevicesByMac', [[
+        $device = [
             'mac' => $this->normalizeMac($params['device_address']),
             'serverId' => $serverId,
-        ]]);
+        ];
+
+        if ($requiresSerialNumber) {
+            $device['sn'] = $serialNumber;
+        }
+
+        $result = $this->requestJson('POST', $requiresSerialNumber ? '/v2/rps/addDevices' : '/v2/rps/addDevicesByMac', [$device]);
 
         return $this->batchResult($result, 'Unable to add the device to Yealink RPS.');
     }
@@ -268,6 +295,10 @@ class YealinkRpsCloudProvider implements CloudProviderInterface
 
         if (! $response->successful()) {
             $message = $this->responseMessage($response, 'Yealink RPS returned an error.');
+
+            if ($response->status() === 403 && $path === '/v2/rps/addDevicesByMac') {
+                $message .= ' ' . __('If your Yealink account requires serial numbers, enable Require serial number under Vendor Cloud > Yealink > API Credentials.');
+            }
 
             logger()->warning('Yealink RPS API error', [
                 'status' => $response->status(),

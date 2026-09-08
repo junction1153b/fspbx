@@ -10,6 +10,25 @@ use Tests\TestCase;
 
 class YealinkRpsRequestTest extends TestCase
 {
+    public function test_serial_number_mode_accepts_booleans_and_rejects_invalid_values(): void
+    {
+        $data = [
+            'provider' => 'yealink',
+            'access_key_id' => 'key',
+            'access_key_secret' => 'secret',
+            'api_url' => 'https://us-api.ymcs.yealink.com',
+        ];
+        $rules = (new UpdateCloudProviderCredentialsRequest())->rules();
+
+        $this->assertTrue(Validator::make($data, $rules)->passes());
+        foreach ([true, false, 1, 0, '1', '0'] as $value) {
+            $this->assertTrue(Validator::make($data + ['require_serial_number' => $value], $rules)->passes());
+        }
+        foreach ([null, 'false', 'yes', [], 2] as $value) {
+            $this->assertTrue(Validator::make($data + ['require_serial_number' => $value], $rules)->errors()->has('require_serial_number'));
+        }
+    }
+
     public function test_yealink_accepts_valid_server_fields(): void
     {
         $request = new StoreZtpOrganizationRequest();

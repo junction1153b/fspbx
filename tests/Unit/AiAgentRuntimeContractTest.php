@@ -27,7 +27,7 @@ class AiAgentRuntimeContractTest extends TestCase
         $this->assertStringNotContainsString('password', strtolower($script));
     }
 
-    public function test_return_runtime_requires_the_strict_uuid_transfer_shape_and_tenant_extension(): void
+    public function test_return_runtime_requires_the_strict_uuid_transfer_shape_and_tenant_destination(): void
     {
         $script = file_get_contents(dirname(__DIR__, 2) . '/resources/freeswitch_scripts/ai_agent_return.lua');
 
@@ -39,6 +39,75 @@ class AiAgentRuntimeContractTest extends TestCase
         $this->assertStringContainsString('"Matched transfer target: AI Agent UUID="', $script);
         $this->assertStringContainsString('log("Final transfer command: " .. transfer_destination)', $script);
         $this->assertStringContainsString('session:execute("transfer", transfer_destination)', $script);
+    }
+
+    /** @dataProvider transferTargetProvider */
+    public function test_transfer_lookup_only_accepts_enabled_destinations_in_the_agents_account(
+        string $extension,
+        bool $allowed,
+        ?string $mutation = null
+    ): void {
+        $database = new \PDO('sqlite::memory:');
+        $database->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $database->exec(<<<'SQL'
+            CREATE TABLE ai_agents (ai_agent_uuid TEXT, domain_uuid TEXT, enabled BOOLEAN, provisioning_status TEXT);
+            CREATE TABLE v_domains (domain_uuid TEXT, domain_name TEXT, domain_enabled TEXT);
+            CREATE TABLE v_extensions (domain_uuid TEXT, extension TEXT, enabled TEXT);
+            CREATE TABLE v_ring_groups (domain_uuid TEXT, ring_group_extension TEXT, ring_group_enabled TEXT);
+            INSERT INTO ai_agents VALUES ('aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 'account-a', true, 'synced');
+            INSERT INTO v_domains VALUES ('account-a', 'a.example.test', 'true'), ('account-b', 'b.example.test', 'true');
+            INSERT INTO v_extensions VALUES
+                ('account-a', '100', 'true'),
+                ('account-b', '100', 'true'),
+                ('account-b', '101', 'true'),
+                ('account-a', '102', 'false'),
+                ('account-b', '102', 'true');
+            INSERT INTO v_ring_groups VALUES
+                ('account-a', '8000', 'true'),
+                ('account-b', '8000', 'true'),
+                ('account-b', '8001', 'true'),
+                ('account-a', '8002', 'false'),
+                ('account-b', '8002', 'true'),
+                ('account-a', '8003', NULL);
+            SQL);
+
+        if ($mutation !== null) {
+            $database->exec($mutation);
+        }
+
+        // Execute the runtime's SQL itself so account and enabled checks are exercised.
+        $script = file_get_contents(dirname(__DIR__, 2) . '/resources/freeswitch_scripts/ai_agent_return.lua');
+        $this->assertSame(1, preg_match('/dbh:first_row\(\[\[(.*?)\]\]/s', $script, $matches));
+        $statement = $database->prepare($matches[1]);
+        $statement->execute([
+            'agent_uuid' => 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+            'extension' => $extension,
+        ]);
+
+        $this->assertSame($allowed ? [
+            'domain_uuid' => 'account-a',
+            'domain_name' => 'a.example.test',
+            'extension' => $extension,
+        ] : false, $statement->fetch(\PDO::FETCH_ASSOC));
+    }
+
+    public static function transferTargetProvider(): iterable
+    {
+        yield 'own extension with the same number in another account' => ['100', true];
+        yield 'own ring group without an extension row' => ['8000', true];
+        yield 'foreign extension' => ['101', false];
+        yield 'foreign ring group' => ['8001', false];
+        yield 'disabled extension with an enabled foreign match' => ['102', false];
+        yield 'disabled ring group with an enabled foreign match' => ['8002', false];
+        yield 'ring group without an enabled value' => ['8003', false];
+        yield 'unknown destination' => ['9999', false];
+
+        foreach (['extension' => '100', 'ring group' => '8000'] as $type => $extension) {
+            yield "$type with a disabled account" => [$extension, false, "UPDATE v_domains SET domain_enabled = 'false' WHERE domain_uuid = 'account-a'"];
+            yield "$type with a disabled agent" => [$extension, false, 'UPDATE ai_agents SET enabled = false'];
+            yield "$type with an unsynchronized agent" => [$extension, false, "UPDATE ai_agents SET provisioning_status = 'failed'"];
+            yield "$type with an unknown agent" => [$extension, false, 'DELETE FROM ai_agents'];
+        }
     }
 
     public function test_phone_number_routing_builder_transfers_to_the_ai_agent_extension(): void

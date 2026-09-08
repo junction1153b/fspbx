@@ -143,11 +143,7 @@ class SwitchVariableController extends Controller
             return response()->json(['messages' => ['error' => ['Access denied.']]], 403);
         }
 
-        if (! $this->variables->syncVarsXml()) {
-            return response()->json([
-                'messages' => ['error' => ['Unable to write vars.xml. Check the switch conf directory setting.']],
-            ], 422);
-        }
+        $this->variables->syncAndReloadXml();
 
         return response()->json(['messages' => ['success' => ['vars.xml updated.']]]);
     }

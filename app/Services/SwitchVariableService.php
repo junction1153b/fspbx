@@ -9,6 +9,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class SwitchVariableService
 {
@@ -61,7 +62,7 @@ class SwitchVariableService
 
     public function saveVariable(array $data, ?SwitchVariable $variable = null): SwitchVariable
     {
-        return DB::transaction(function () use ($data, $variable) {
+        $variable = DB::transaction(function () use ($data, $variable) {
             $variable ??= new SwitchVariable();
             $variable->forceFill([
                 'var_uuid' => $variable->var_uuid ?: Str::uuid()->toString(),
@@ -75,15 +76,17 @@ class SwitchVariableService
                 'var_description' => $data['var_description'] ?? null,
             ])->save();
 
-            $this->syncVarsXml();
-
             return $variable;
         });
+
+        $this->syncAndReloadXml();
+
+        return $variable;
     }
 
     public function toggle(array $uuids): int
     {
-        return DB::transaction(function () use ($uuids) {
+        $count = DB::transaction(function () use ($uuids) {
             $variables = SwitchVariable::query()->whereIn('var_uuid', $uuids)->get();
 
             $variables->each(function (SwitchVariable $variable) {
@@ -91,15 +94,17 @@ class SwitchVariableService
                 $variable->save();
             });
 
-            $this->syncVarsXml();
-
             return $variables->count();
         });
+
+        $this->syncAndReloadXml();
+
+        return $count;
     }
 
     public function copy(array $uuids): int
     {
-        return DB::transaction(function () use ($uuids) {
+        $count = DB::transaction(function () use ($uuids) {
             $copied = 0;
 
             foreach (SwitchVariable::query()->whereIn('var_uuid', $uuids)->get() as $variable) {
@@ -110,25 +115,56 @@ class SwitchVariableService
                 $copied++;
             }
 
-            if ($copied > 0) {
-                $this->syncVarsXml();
-            }
-
             return $copied;
         });
+
+        if ($count > 0) {
+            $this->syncAndReloadXml();
+        }
+
+        return $count;
     }
 
     public function delete(array $uuids): int
     {
-        return DB::transaction(function () use ($uuids) {
+        $count = DB::transaction(function () use ($uuids) {
             $deleted = SwitchVariable::query()->whereIn('var_uuid', $uuids)->delete();
-
-            if ($deleted > 0) {
-                $this->syncVarsXml();
-            }
 
             return $deleted;
         });
+
+        if ($count > 0) {
+            $this->syncAndReloadXml();
+        }
+
+        return $count;
+    }
+
+    public function syncAndReloadXml(): void
+    {
+        try {
+            if (! $this->syncVarsXml()) {
+                throw new \RuntimeException('Unable to write vars.xml. Check the switch conf directory setting.');
+            }
+
+            $esl = app(FreeswitchEslService::class);
+            if (! $esl->isConnected()) {
+                throw new \RuntimeException('FreeSWITCH event socket is unavailable.');
+            }
+
+            $response = $esl->executeCommand('reloadxml');
+            if (! is_string($response) || ! preg_match('/^\+?OK\b/i', trim($response))) {
+                throw new \RuntimeException(
+                    is_string($response) && trim($response) !== ''
+                        ? 'FreeSWITCH reloadxml: ' . trim($response)
+                        : 'FreeSWITCH XML reload was not confirmed.'
+                );
+            }
+        } catch (\Throwable $exception) {
+            throw ValidationException::withMessages([
+                'runtime' => [__('Variables remain saved in the database, but FreeSWITCH synchronization failed. Correct the problem and use Sync to retry.') . ' ' . $exception->getMessage()],
+            ]);
+        }
     }
 
     public function categories(): array
@@ -193,9 +229,7 @@ class SwitchVariableService
                 $previousCategory = $variable->var_category;
             });
 
-        File::put(rtrim($confDir, '/') . '/vars.xml', $xml . "\n");
-
-        return true;
+        return File::put(rtrim($confDir, '/') . '/vars.xml', $xml . "\n") !== false;
     }
 
     private function serializeVariable(SwitchVariable $variable): array

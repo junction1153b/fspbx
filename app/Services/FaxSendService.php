@@ -783,6 +783,11 @@ class FaxSendService
                 Str::uuid()->toString() . $extension
             );
 
+            if ($stored === false) {
+                Log::alert('Failed to save fax attachment to the fax disk.');
+                return null;
+            }
+
             return [
                 'original_name' => $originalName,
                 'stored_path'   => $stored,

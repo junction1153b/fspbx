@@ -1385,23 +1385,39 @@ class FaxesController extends Controller
             $attachments = [];
             foreach (($files ?? []) as $file) {
                 $meta = FaxSendService::storeUploadedAttachment($file);
-                if ($meta !== null) {
-                    $attachments[] = $meta;
+                if ($meta === null) {
+                    foreach ($attachments as $attachment) {
+                        Storage::disk('fax')->delete($attachment['stored_path']);
+                    }
+
+                    return response()->json([
+                        'message' => __('The fax attachment could not be saved. Please try again.'),
+                        'errors' => ['files' => [__('The fax attachment could not be saved. Please try again.')]],
+                    ], 422);
                 }
+                $attachments[] = $meta;
             }
 
             // Subject of "body" tells FaxSendService to render a cover page
             // from the body text. Empty subject = no cover page.
             // From is left blank when the user opted out of confirmation
             // emails so FaxSendService doesn't notify them.
-            FaxSendService::send([
+            $result = FaxSendService::send([
                 'from'            => $data['send_confirmation'] ? Session::get('user.user_email') : '',
                 'fax_destination' => $data['recipient'],
                 'fax_uuid'        => $data['fax_uuid'],
+                'domain_uuid'     => $fax->domain_uuid,
                 'subject'         => isset($data['fax_message']) ? 'body' : '',
                 'body'            => isset($data['fax_message']) ? strip_tags($data['fax_message']) : '',
                 'attachments'     => $attachments,
             ]);
+
+            if (!is_string($result) || !Str::isUuid($result)) {
+                return response()->json([
+                    'message' => __('There was a problem processing your fax. Please check your attachments and try again.'),
+                    'errors' => ['files' => [__('There was a problem processing your fax. Please check your attachments and try again.')]],
+                ], 422);
+            }
 
             return response()->json([
                 'messages' => ['success' => [__('Fax is scheduled for delivery')]],

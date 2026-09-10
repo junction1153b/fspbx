@@ -3,6 +3,8 @@
 namespace App\Http\Requests;
 
 use App\Rules\UniqueExtension;
+use App\Services\FaxSendService;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Foundation\Http\FormRequest;
 
 class CreateNewFaxRequest extends FormRequest
@@ -25,6 +27,19 @@ class CreateNewFaxRequest extends FormRequest
                 'file',
                 'mimes:pdf,doc,docx,rtf,xls,xlsx,csv,txt,tif,tiff,jpg,jpeg', // allowed file types
                 'max:20480', // max size in KB (e.g., 20MB)
+                function ($attribute, $value, $fail) {
+                    if (!$value instanceof UploadedFile) {
+                        return;
+                    }
+
+                    $allowed = FaxSendService::getAllowedExtensions();
+                    $extension = '.' . strtolower($value->getClientOriginalExtension());
+                    if (!in_array($extension, $allowed, true)) {
+                        $fail(__('This file type is not enabled for faxing. Allowed file types: :types', [
+                            'types' => implode(', ', $allowed),
+                        ]));
+                    }
+                },
             ],
         ];
     }

@@ -54,6 +54,7 @@ use App\Http\Controllers\ScheduledJobCoordinationController;
 use App\Http\Controllers\ScheduledJobPeerController;
 use App\Http\Controllers\EmailTemplateController;
 use App\Http\Controllers\ExtensionsController;
+use App\Http\Controllers\CompanyCallerIdController;
 use App\Http\Controllers\ExtensionWelcomeEmailController;
 use App\Http\Controllers\ExtensionStatisticsController;
 use App\Http\Controllers\FaxesController;
@@ -92,12 +93,13 @@ use App\Http\Controllers\SwitchModuleController;
 use App\Http\Controllers\SwitchVariableController;
 use App\Http\Controllers\SystemController;
 use App\Http\Controllers\SystemSettingsController;
+use App\Http\Controllers\NumberTranslationController;
 use App\Http\Controllers\TestEmailController;
 use App\Http\Controllers\TigerTmsLogsController;
 use App\Http\Controllers\TigerTmsWebhookController;
 use App\Http\Controllers\TokenController;
 use App\Http\Controllers\UserLogsController;
-use App\Http\Controllers\UsersController;
+use App\Http\Controllers\UserController;
 use App\Http\Controllers\VirtualReceptionistController;
 use App\Http\Controllers\VoicemailController;
 use App\Http\Controllers\VoicemailMessagesController;
@@ -354,6 +356,7 @@ Route::group(['middleware' => ['auth:sanctum', 'api.cookie.auth']], function () 
     // Menu Manager
     Route::get('menus/{menu}/data', [MenuManagerController::class, 'data'])->name('menus.data');
     Route::post('menus', [MenuManagerController::class, 'store'])->name('menus.store');
+    Route::post('menus/{menu}/copy', [MenuManagerController::class, 'copy'])->name('menus.copy');
     Route::put('menus/{menu}', [MenuManagerController::class, 'update'])->name('menus.update');
     Route::delete('menus/{menu}', [MenuManagerController::class, 'destroy'])->name('menus.destroy');
     Route::post('menus/{menu}/items', [MenuManagerController::class, 'storeItem'])->name('menus.items.store');
@@ -392,12 +395,12 @@ Route::group(['middleware' => ['auth:sanctum', 'api.cookie.auth']], function () 
     Route::post('domain-groups/select-all', [DomainGroupsController::class, 'selectAll'])->name('domain-groups.select.all');
 
     // Users
-    Route::get('users/data', [UsersController::class, 'getData'])->name('users.data');
-    Route::post('users', [UsersController::class, 'store'])->name('users.store');
-    Route::put('users/{user}', [UsersController::class, 'update'])->name('users.update');
-    Route::post('users/item-options', [UsersController::class, 'getItemOptions'])->name('users.item.options');
-    Route::post('users/bulk-delete', [UsersController::class, 'bulkDelete'])->name('users.bulk.delete');
-    Route::post('users/select-all', [UsersController::class, 'selectAll'])->name('users.select.all');
+    Route::get('users/data', [UserController::class, 'getData'])->name('users.data');
+    Route::post('users', [UserController::class, 'store'])->name('users.store');
+    Route::put('users/{user}', [UserController::class, 'update'])->name('users.update');
+    Route::post('users/item-options', [UserController::class, 'getItemOptions'])->name('users.item.options');
+    Route::post('users/bulk-delete', [UserController::class, 'bulkDelete'])->name('users.bulk.delete');
+    Route::post('users/select-all', [UserController::class, 'selectAll'])->name('users.select.all');
     Route::get('ldap-directories', [LdapDirectoryController::class, 'index'])->name('ldap-directories.index');
     Route::get('scheduled-jobs/active-node', [ScheduledJobCoordinationController::class, 'show'])->name('scheduled-jobs.active-node.show');
     Route::post('scheduled-jobs/nodes/discover', [ScheduledJobCoordinationController::class, 'discover'])->name('scheduled-jobs.nodes.discover');
@@ -419,6 +422,7 @@ Route::group(['middleware' => ['auth:sanctum', 'api.cookie.auth']], function () 
 
     // Extensions
     Route::post('extensions', [ExtensionsController::class, 'store'])->name('extensions.store');
+    Route::put('extensions/company-caller-id/{domain}', [CompanyCallerIdController::class, 'update'])->name('extensions.company-caller-id.update');
     Route::put('extensions/{extension}', [ExtensionsController::class, 'update'])->name('extensions.update');
     Route::get('extensions/data', [ExtensionsController::class, 'getData'])->name('extensions.data');
     Route::post('extensions/item-options', [ExtensionsController::class, 'getItemOptions'])->name('extensions.item.options');
@@ -924,6 +928,12 @@ Route::group(['middleware' => ['auth:sanctum', 'api.cookie.auth']], function () 
 
     // System Settings
     Route::put('system-settings/update', [SystemSettingsController::class, 'update'])->name('system-settings.update');
+    Route::get('system-settings/number-translations', [NumberTranslationController::class, 'index'])->name('number-translations.index');
+    Route::post('system-settings/number-translations', [NumberTranslationController::class, 'store'])->name('number-translations.store');
+    Route::post('system-settings/number-translations/sync', [NumberTranslationController::class, 'sync'])->name('number-translations.sync');
+    Route::get('system-settings/number-translations/{number_translation}', [NumberTranslationController::class, 'show'])->whereUuid('number_translation')->name('number-translations.show');
+    Route::put('system-settings/number-translations/{number_translation}', [NumberTranslationController::class, 'update'])->whereUuid('number_translation')->name('number-translations.update');
+    Route::delete('system-settings/number-translations/{number_translation}', [NumberTranslationController::class, 'destroy'])->whereUuid('number_translation')->name('number-translations.destroy');
     Route::put('system-settings/sip-capture', [SystemSettingsController::class, 'updateSipCapture'])->name('system-settings.sip_capture.update');
     Route::get('system-settings/payment_gateways', [SystemSettingsController::class, 'getPaymentGatewayData'])->name('system-settings.payment_gateways');
     Route::post('/gateways/test', [PaymentGatewayController::class, 'test'])->name('gateway.test');

@@ -55,6 +55,8 @@ use App\Console\Commands\Updates\Update197;
 use App\Console\Commands\Updates\Update198;
 use App\Console\Commands\Updates\Update199;
 use App\Console\Commands\Updates\Update200;
+use App\Console\Commands\Updates\Update203;
+use App\Console\Commands\Updates\Update204;
 use App\Console\Commands\Updates\Update0917;
 use App\Console\Commands\Updates\Update0918;
 use App\Console\Commands\Updates\Update0924;
@@ -186,6 +188,8 @@ class UpdateApp extends Command
             '1.9.8' => Update198::class,
             '1.9.9' => Update199::class,
             '2.0.0' => Update200::class,
+            '2.0.3' => Update203::class,
+            '2.0.4' => Update204::class,
             // Add more versions as needed
         ];
 
@@ -211,6 +215,7 @@ class UpdateApp extends Command
 
                 // If the update is successful, call the version:set command
                 $this->call('version:set', ['version' => $version, '--force' => true]);
+                $currentVersion = $version;
                 $this->info("Version successfully updated to $version.");
             }
         }

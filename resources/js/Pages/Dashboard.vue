@@ -1,6 +1,7 @@
 <template>
     <MainLayout>
-        <TopBanner :show="showTopBanner" @close="showTopBanner = false" color="bg-rose-600" :text="topBannerText" />
+        <TopBanner :show="showTopBanner" @close="showTopBanner = false" color="bg-rose-600" :text="topBannerText"
+            :link-href="company_data.billing_pay_url" :link-text="$t('Pay now')" />
 
         <main class="bg-slate-50/60">
             <div class="mx-auto max-w-none px-4 py-8 sm:px-6 lg:px-8">
@@ -341,7 +342,7 @@ const notificationShow = ref(false);
 const isAgentStatusUpdating = ref(false);
 
 const showTopBanner = ref(Boolean(props.company_data.billing_suspension));
-const topBannerText = ref(trans('Your account has been suspended. Reactivation requires payment for past-due invoice(s).'));
+const topBannerText = computed(() => trans('Your account has been suspended. Reactivation requires payment for past-due invoice(s).'));
 
 const countsLoaded = computed(() => Object.keys(counts.value).length !== 0);
 
@@ -353,19 +354,19 @@ const registrationPercent = computed(() => {
     return Math.min(Math.round((onlineExtensions.value / totalExtensions) * 100), 100);
 });
 
-const forwardBadgeLabels = {
+const forwardBadgeLabels = computed(() => ({
     forward_all: trans('FWD All'),
     forward_busy: trans('FWD Busy'),
     forward_no_answer: trans('FWD no Ans'),
     forward_user_not_registered: trans('FWD no Reg'),
-};
+}));
 
 const activeForwarding = computed(() => {
     return (my_extension_status.value?.forwarding || [])
         .filter((forward) => forward.enabled)
         .map((forward) => ({
             ...forward,
-            badge: forwardBadgeLabels[forward.key] || forward.label,
+            badge: forwardBadgeLabels.value[forward.key] || forward.label,
         }));
 });
 
@@ -378,11 +379,11 @@ const hasActiveCallHandling = computed(() => {
 });
 
 const agentStatusOptions = ['Available', 'On Break', 'Logged Out'];
-const agentStatusLabels = {
+const agentStatusLabels = computed(() => ({
     'Available': trans('Available'),
     'On Break': trans('On Break'),
     'Logged Out': trans('Logged Out'),
-};
+}));
 const agentStatusStyleMap = {
     'Available': {
         button: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 hover:bg-emerald-100',
@@ -402,11 +403,11 @@ const fallbackAgentStatusStyle = {
     dot: 'bg-gray-400',
 };
 
-const agentStatusLabel = (status) => agentStatusLabels[status] || status;
+const agentStatusLabel = (status) => agentStatusLabels.value[status] || status;
 const agentStatusStyle = (status) => agentStatusStyleMap[status] || fallbackAgentStatusStyle;
 const agentStatusStyles = computed(() => agentStatusStyle(my_extension_status.value?.agent?.status));
 
-const customerNoteLayers = [
+const customerNoteLayers = computed(() => [
     {
         key: 'level_1',
         level: 1,
@@ -431,13 +432,13 @@ const customerNoteLayers = [
         labelClass: 'text-rose-800',
         dotClass: 'bg-rose-600',
     },
-];
+]);
 
 const visibleCustomerNotes = computed(() => {
     const levels = customerNotes.value?.levels || [];
     const notes = customerNotes.value?.notes || {};
 
-    return customerNoteLayers
+    return customerNoteLayers.value
         .filter((layer) => levels.includes(layer.level))
         .map((layer) => ({
             ...layer,

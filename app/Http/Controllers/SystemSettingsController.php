@@ -49,6 +49,12 @@ class SystemSettingsController extends Controller
                 'routes' => [
                     'dashboard_route' => route('dashboard'),
                     'settings_update' => route('system-settings.update'),
+                    'number_translations' => [
+                        'index' => route('number-translations.index'),
+                        'store' => route('number-translations.store'),
+                        'item' => route('number-translations.show', ['number_translation' => '__UUID__']),
+                        'sync' => route('number-translations.sync'),
+                    ],
                     'sip_capture_update' => route('system-settings.sip_capture.update'),
                     'payment_gateways' => route('system-settings.payment_gateways'),
                     'payment_gateway_update' => route('gateway.update'),
@@ -61,8 +67,7 @@ class SystemSettingsController extends Controller
                     'assemblyai_route' => route('call-transcription.assemblyai'),
                     'assemblyai_store_route' => route('call-transcription.assemblyai.store'),
                 ],
-                // Schema-driven General tab. Same declarative fields as the
-                // account surface, but these are the global default_settings
+                // Schema-driven General tab. These are the global default_settings
                 // values every account inherits unless it sets its own.
                 'settings_schema' => $this->schema->fields(),
                 'settings_options' => function () {
@@ -100,7 +105,7 @@ class SystemSettingsController extends Controller
 
             if (! $result['runtime_synchronized']) {
                 $messages['error'] = [__(
-                    'The settings were saved, but FreeSWITCH could not apply them live. Check the event socket and rescan the affected SIP profiles.'
+                    __('The settings were saved, but FreeSWITCH could not apply them live. Check the event socket and rescan the affected SIP profiles.')
                 )];
             }
 
@@ -128,7 +133,7 @@ class SystemSettingsController extends Controller
     public function update(UpdateSystemSettingsRequest $request): JsonResponse
     {
         if (!userCheckPermission('default_setting_edit')) {
-            return response()->json(['errors' => ['authorization' => ['Access denied.']]], 403);
+            return response()->json(['errors' => ['authorization' => [__('Access denied.')]]], 403);
         }
 
         try {
@@ -139,7 +144,7 @@ class SystemSettingsController extends Controller
             DB::commit();
 
             return response()->json([
-                'messages' => ['server' => ['Settings updated successfully.']],
+                'messages' => ['server' => [__('Settings updated successfully.')]],
             ], 200);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -148,7 +153,7 @@ class SystemSettingsController extends Controller
 
             return response()->json([
                 'success' => false,
-                'errors' => ['server' => ['Server returned an error while processing your request.']]
+                'errors' => ['server' => [__('Server returned an error while processing your request.')]]
             ], 500);
         }
     }
@@ -166,11 +171,6 @@ class SystemSettingsController extends Controller
     {
         $fields = collect($this->schema->fields())->keyBy('key');
 
-        $existing = DefaultSettings::query()
-            ->whereIn('default_setting_subcategory', $fields->pluck('subcategory')->all())
-            ->get()
-            ->keyBy('default_setting_subcategory');
-
         foreach ($submitted as $key => $value) {
             $field = $fields->get($key);
             if (! $field) {
@@ -182,7 +182,11 @@ class SystemSettingsController extends Controller
                 continue; // never blank a global default
             }
 
-            $row = $existing->get($field['subcategory']);
+            $row = DefaultSettings::query()
+                ->where('default_setting_category', $field['category'])
+                ->where('default_setting_subcategory', $field['subcategory'])
+                ->where('default_setting_name', $field['name'])
+                ->first();
             if ($row && (string) $row->default_setting_value === (string) $value) {
                 continue; // unchanged
             }
@@ -223,7 +227,7 @@ class SystemSettingsController extends Controller
             );
 
             return response()->json([
-                'messages' => ['error' => ['Something went wrong while loading payment gateways.']],
+                'messages' => ['error' => [__('Something went wrong while loading payment gateways.')]],
             ], 500);
         }
     }
@@ -236,6 +240,9 @@ class SystemSettingsController extends Controller
         $permissions['call_transcription_settings_view'] = userCheckPermission('call_transcription_settings_view');
         $permissions['default_setting_view'] = userCheckPermission('default_setting_view');
         $permissions['default_setting_edit'] = userCheckPermission('default_setting_edit');
+        foreach (['view', 'add', 'edit', 'delete'] as $action) {
+            $permissions['number_translation_' . $action] = userCheckPermission('number_translation_' . $action);
+        }
         $permissions['sip_capture_view'] = $this->canViewSipCapture();
         $permissions['sip_capture_edit'] = $this->canEditSipCapture();
 
